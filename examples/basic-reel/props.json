@@ -1,0 +1,7 @@
+{
+  "videoSrc": "example/video.webm",
+  "title": "Первые 3 секунды\nрешают всё",
+  "captionsSrc": "example/captions.srt",
+  "accentColor": "#FFD84D",
+  "ctaText": "Сохрани, чтобы не потерять"
+}
