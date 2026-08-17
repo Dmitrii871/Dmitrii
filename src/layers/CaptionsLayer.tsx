@@ -1,6 +1,9 @@
+import { useMemo } from "react";
 import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotion";
 import { useSrtCaptions } from "../captions/use-srt-captions";
 import type { CaptionPage } from "../captions/srt-to-pages";
+import { remapCaptionPages } from "../edit/remap-captions";
+import type { Timeline } from "../edit/timeline";
 import { fontFamily } from "../lib/font";
 
 // Сколько слов показываем за раз.
@@ -67,9 +70,20 @@ const CaptionPageLayer: React.FC<{
 export const CaptionsLayer: React.FC<{
   src: string;
   accentColor: string;
-}> = ({ src, accentColor }) => {
+  timeline: Timeline;
+}> = ({ src, accentColor, timeline }) => {
   const { fps } = useVideoConfig();
-  const pages = useSrtCaptions({ src, maxWordsPerPage: MAX_WORDS_PER_PAGE });
+  const parsed = useSrtCaptions({ src, maxWordsPerPage: MAX_WORDS_PER_PAGE });
+
+  // Субтитры размечены по исходнику, а ролик смонтирован — переносим
+  // тайминги на новый таймлайн, иначе текст разъедется с речью.
+  const pages = useMemo(() => {
+    if (!parsed) {
+      return null;
+    }
+
+    return remapCaptionPages(parsed, timeline);
+  }, [parsed, timeline]);
 
   if (!pages) {
     return null;

@@ -20,6 +20,12 @@ export const RemotionRoot: React.FC = () => {
         captionsSrc: "example/captions.srt",
         accentColor: "#FFD84D",
         ctaText: "Сохрани, чтобы не потерять",
+        autoCutSilence: true,
+        maxDurationSeconds: 180,
+        shotTransition: "fade" as const,
+        dynamicZoom: true,
+        musicSrc: "example/music.mp3",
+        musicVolume: 0.5,
       }}
     />
   );
