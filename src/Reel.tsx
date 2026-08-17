@@ -5,11 +5,11 @@ import { z } from "zod";
 import { analyzeLoudness } from "./edit/analyze-audio";
 import type { LoudnessEnvelope } from "./edit/analyze-audio";
 import { buildShots } from "./edit/build-shots";
-import { buildTimeline } from "./edit/timeline";
+import { buildTimeline, editedFrameToOriginalMs } from "./edit/timeline";
 import type { Timeline } from "./edit/timeline";
 import { CaptionsLayer } from "./layers/CaptionsLayer";
 import { CtaLayer } from "./layers/CtaLayer";
-import { EditedVideoLayer } from "./layers/EditedVideoLayer";
+import { ShotSeries } from "./layers/ShotSeries";
 import { MusicLayer } from "./layers/MusicLayer";
 import { TitleLayer } from "./layers/TitleLayer";
 import { getVideoDuration } from "./lib/get-video-duration";
@@ -121,18 +121,19 @@ export const Reel: React.FC<ReelProps> = ({
 
   return (
     <AbsoluteFill name="Рилс" style={{ backgroundColor: "#000000" }}>
-      <EditedVideoLayer
-        src={videoSrc}
+      <ShotSeries
+        shots={resolvedTimeline.shots.map((shot) => ({ ...shot, src: videoSrc }))}
         timeline={resolvedTimeline}
         shotTransition={shotTransition}
         dynamicZoom={dynamicZoom}
+        muted={false}
       />
       {musicSrc ? (
         <MusicLayer
           src={musicSrc}
           volume={musicVolume}
-          timeline={resolvedTimeline}
           envelope={envelope ?? EMPTY_ENVELOPE}
+          sourceMsAtFrame={(frame) => editedFrameToOriginalMs(resolvedTimeline, frame)}
         />
       ) : null}
       <TitleLayer text={title} accentColor={accentColor} durationInSeconds={2} />

@@ -3,7 +3,7 @@ import { TransitionSeries, linearTiming } from "@remotion/transitions";
 import { fade } from "@remotion/transitions/fade";
 import { slide } from "@remotion/transitions/slide";
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
-import type { Shot } from "../edit/build-shots";
+import type { ClipShot } from "../edit/build-playlist";
 import type { Timeline } from "../edit/timeline";
 import { resolveSrc } from "../lib/resolve-src";
 
@@ -22,12 +22,12 @@ const SHOT_VARIANTS = [
 const STATIC_VARIANT = { fromScale: 1, toScale: 1, fromShift: "0% 0%", toShift: "0% 0%" };
 
 const ShotView: React.FC<{
-  src: string;
-  shot: Shot;
+  shot: ClipShot;
   durationInFrames: number;
   variantIndex: number;
   dynamicZoom: boolean;
-}> = ({ src, shot, durationInFrames, variantIndex, dynamicZoom }) => {
+  muted: boolean;
+}> = ({ shot, durationInFrames, variantIndex, dynamicZoom, muted }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -40,9 +40,10 @@ const ShotView: React.FC<{
     <AbsoluteFill name="План" style={{ overflow: "hidden", backgroundColor: "#000000" }}>
       <Video
         name="Видео"
-        src={src}
+        src={resolveSrc(shot.src)}
         trimBefore={Math.round((shot.fromMs / 1000) * fps)}
         trimAfter={Math.round((shot.toMs / 1000) * fps)}
+        muted={muted}
         objectFit="cover"
         style={{
           width: "100%",
@@ -64,35 +65,38 @@ const ShotView: React.FC<{
   );
 };
 
-export const EditedVideoLayer: React.FC<{
-  src: string;
+// Видеоряд: планы встык или с переходами. Один и тот же компонент
+// собирает и нарезку одной записи, и монтаж из отдельных клипов —
+// разница только в том, что лежит в shots.
+export const ShotSeries: React.FC<{
+  shots: ClipShot[];
   timeline: Timeline;
   shotTransition: TransitionKind;
   dynamicZoom: boolean;
-}> = ({ src, timeline, shotTransition, dynamicZoom }) => {
-  const resolved = resolveSrc(src);
+  muted: boolean;
+}> = ({ shots, timeline, shotTransition, dynamicZoom, muted }) => {
   const useTransitions = shotTransition !== "none" && timeline.transitionFrames > 0;
 
   return (
     <AbsoluteFill name="Видеоряд" style={{ backgroundColor: "#000000" }}>
       <TransitionSeries>
-        {timeline.shots.flatMap((shot, index) => {
+        {shots.flatMap((shot, index) => {
           const sequence = (
             <TransitionSeries.Sequence
               key={`shot-${index}`}
               durationInFrames={timeline.shotDurations[index]}
             >
               <ShotView
-                src={resolved}
                 shot={shot}
                 durationInFrames={timeline.shotDurations[index]}
                 variantIndex={index}
                 dynamicZoom={dynamicZoom}
+                muted={muted}
               />
             </TransitionSeries.Sequence>
           );
 
-          if (!useTransitions || index === timeline.shots.length - 1) {
+          if (!useTransitions || index === shots.length - 1) {
             return [sequence];
           }
 

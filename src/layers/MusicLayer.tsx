@@ -2,19 +2,20 @@ import { Audio } from "@remotion/media";
 import { interpolate, useVideoConfig } from "remotion";
 import { speechLevelAt } from "../edit/analyze-audio";
 import type { LoudnessEnvelope } from "../edit/analyze-audio";
-import { editedFrameToOriginalMs } from "../edit/timeline";
-import type { Timeline } from "../edit/timeline";
 import { resolveSrc } from "../lib/resolve-src";
 
 // Фоновая музыка, которая сама уходит на второй план под голос.
-// Уровень речи берём из разбора исходной дорожки: там, где человек
-// говорит, музыка прижимается, в паузах и на заставке звучит в полную.
+//
+// Уровень голоса известен по разобранной дорожке, но её время — это время
+// исходника или озвучки, а не готового ролика. Поэтому пересчёт кадра
+// в момент дорожки передаётся снаружи: у нарезанной записи он один,
+// у сборки под озвучку — другой.
 export const MusicLayer: React.FC<{
   src: string;
   volume: number;
-  timeline: Timeline;
   envelope: LoudnessEnvelope;
-}> = ({ src, volume, timeline, envelope }) => {
+  sourceMsAtFrame: (frame: number) => number;
+}> = ({ src, volume, envelope, sourceMsAtFrame }) => {
   const { durationInFrames } = useVideoConfig();
 
   return (
@@ -25,7 +26,7 @@ export const MusicLayer: React.FC<{
       volume={(frame) => {
         const speech = speechLevelAt({
           envelope,
-          ms: editedFrameToOriginalMs(timeline, frame),
+          ms: sourceMsAtFrame(frame),
           smoothMs: 260,
         });
 

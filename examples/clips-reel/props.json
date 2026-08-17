@@ -1,0 +1,16 @@
+{
+  "clipsFolder": "example/clips",
+  "clips": [],
+  "maxClipSeconds": 4,
+  "voiceSrc": "example/voice.mp3",
+  "musicSrc": "example/music.mp3",
+  "musicVolume": 0.5,
+  "keepClipSound": false,
+  "title": "Три кадра,\nодна мысль",
+  "captionsSrc": "",
+  "accentColor": "#FFD84D",
+  "ctaText": "Сохрани, чтобы не потерять",
+  "shotTransition": "fade",
+  "dynamicZoom": true,
+  "maxDurationSeconds": 180
+}
