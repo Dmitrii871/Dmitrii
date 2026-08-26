@@ -98,6 +98,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     curve = [0.0]
     trades: list[float] = []
     by_side: dict[str, list[float]] = {"Buy": [], "Sell": []}
+    ambiguous = 0      # свечи, где задеты И тейк, И стоп: исход выбрало правило
     pos_side: str | None = None
     entry = 0.0
     last_entry_bar = -10**9
@@ -116,7 +117,11 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
             else:
                 tp, sl = entry * (1 - tp_pct), entry * (1 + sl_pct)
                 hit_sl, hit_tp = highs[i] >= sl, lows[i] <= tp
-            # консервативно: если свеча задела оба уровня, считаем стоп
+            # консервативно: если свеча задела оба уровня, считаем стоп.
+            # Доля таких случаев отслеживается: если она велика, результат
+            # определяется этим правилом, а не рынком, и бэктесту нельзя верить.
+            if hit_tp and hit_sl:
+                ambiguous += 1
             exit_price = sl if hit_sl else (tp if hit_tp else None)
             if exit_price is not None:
                 gross = (exit_price - entry) / entry * (1 if pos_side == "Buy" else -1)
@@ -155,6 +160,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
         "profit_factor": (sum(wins) / abs(sum(losses))) if losses and sum(losses) else float("inf"),
         "max_drawdown": max_dd,
         "fees_paid": len(trades) * 2 * fee * notional,
+        "ambiguous_share": (ambiguous / len(trades)) if trades else 0.0,
         "by_side": {
             side: {
                 "trades": len(v),
@@ -216,6 +222,8 @@ def main() -> int:
     print(f"  Профит-фактор      {r['profit_factor']:>12.2f}")
     print(f"  Уплачено комиссий  {r['fees_paid']:>12.4f} USDT")
     print(f"  Макс. просадка     {r['max_drawdown']:>12.4f} USDT")
+    print(f"  Спорных исходов    {r['ambiguous_share']:>11.1%}  "
+          f"(свеча задела и тейк, и стоп)")
     print(f"  ЧИСТЫЙ РЕЗУЛЬТАТ   {r['net_usdt']:>12.4f} USDT")
     print("-" * 56)
     for side, label in (("Buy", "ЛОНГИ "), ("Sell", "ШОРТЫ")):
@@ -223,6 +231,10 @@ def main() -> int:
         print(f"  {label}  сделок {d['trades']:>4} | винрейт {d['win_rate']:>6.1%} "
               f"| итог {d['net_usdt']:>9.4f} USDT")
     print("=" * 56)
+    if r["ambiguous_share"] > 0.10:
+        print(f"  ! {r['ambiguous_share']:.0%} исходов определены правилом бэктеста, а не рынком.")
+        print("    Результату верить нельзя — нужны данные меньшего таймфрейма,")
+        print("    чтобы понять, что сработало первым: тейк или стоп.")
     if r["trades"] < 30:
         print("  ! Меньше 30 сделок — статистика недостоверна, возьмите больше истории")
     longs, shorts = r["by_side"]["Buy"], r["by_side"]["Sell"]
