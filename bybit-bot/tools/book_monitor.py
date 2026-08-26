@@ -20,9 +20,32 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def sample(http, symbol: str) -> dict | None:
+def walk_book(levels: list, mid: float, size_usdt: float) -> float | None:
+    """Во сколько базисных пунктов обойдётся рыночный выход на size_usdt.
+
+    Идём по уровням стакана, пока не наберём нужный объём, и считаем
+    средневзвешенную цену исполнения против середины рынка. Это и есть
+    настоящая стоимость закрытия позиции на тонкой книге.
+    """
+    need, cost, filled = size_usdt, 0.0, 0.0
+    for price_s, qty_s in levels:
+        price, qty = float(price_s), float(qty_s)
+        avail = price * qty
+        take = min(need, avail)
+        cost += take * price
+        filled += take
+        need -= take
+        if need <= 0:
+            break
+    if need > 0 or filled <= 0:
+        return None                     # книги не хватило на такой объём
+    avg = cost / filled
+    return abs(avg - mid) / mid * 10_000
+
+
+def sample(http, symbol: str, exit_size: float) -> dict | None:
     try:
-        ob = http.get_orderbook(category="linear", symbol=symbol, limit=5)["result"]
+        ob = http.get_orderbook(category="linear", symbol=symbol, limit=50)["result"]
         bids, asks = ob.get("b", []), ob.get("a", [])
         if not bids or not asks:
             return None
@@ -35,6 +58,7 @@ def sample(http, symbol: str) -> dict | None:
             "t": time.time(), "mid": mid,
             "spread_bps": (ask - bid) / mid * 10_000,
             "depth_usdt": min(bid * bid_sz, ask * ask_sz),
+            "exit_bps": walk_book(bids, mid, exit_size),
         }
     except Exception:  # noqa: BLE001 — пропуск одного замера не должен рушить наблюдение
         return None
@@ -59,7 +83,7 @@ def main() -> int:
           f"Прервать — Ctrl+C\n")
     try:
         while time.time() < deadline:
-            s = sample(http, args.symbol)
+            s = sample(http, args.symbol, args.notional)
             if s:
                 rows.append(s)
                 if len(rows) % 10 == 0:
@@ -100,9 +124,23 @@ def main() -> int:
     wide = sum(1 for s in spreads if s > rt) / len(spreads)
     print(f"  Время, когда спред шире издержек: {wide:>5.1%}")
     print("  " + "-" * 62)
-    print(f"  Глубина у края книги медиана {statistics.median(depths):>8.0f} USDT")
+    dq = statistics.quantiles(depths, n=4) if len(depths) > 4 else [0, 0, 0]
+    print(f"  Глубина у края: медиана {statistics.median(depths):>7.1f} USDT, "
+          f"нижняя четверть {dq[0]:>6.1f} USDT")
     thin = sum(1 for d in depths if d < args.notional) / len(depths)
     print(f"  Время, когда на краю меньше вашего ордера ({args.notional:g}$): {thin:>5.1%}")
+    print(f"  РЕКОМЕНДУЕМЫЙ РАЗМЕР ОРДЕРА: {dq[0]:>6.1f} USDT")
+    print("    (нижняя четверть глубины — ваша заявка не будет доминировать в книге)")
+
+    exits = [r["exit_bps"] for r in rows if r.get("exit_bps") is not None]
+    if exits:
+        med_exit = statistics.median(exits)
+        print(f"  Проскальзывание рыночного выхода на {args.notional:g}$: "
+              f"{med_exit:>6.2f} bp (медиана)")
+        print(f"    против вашего заработка {half_spread:.2f} bp с одной стороны")
+    else:
+        med_exit = None
+        print(f"  ! Книги не хватает, чтобы закрыть {args.notional:g}$ рыночным ордером")
     print("  " + "-" * 62)
     print(f"  Ваш заработок с одной стороны (половина спреда): {half_spread:>6.2f} bp")
     print()
@@ -137,8 +175,15 @@ def main() -> int:
         print("    далеко не всегда, реальный запас меньше, чем показал сканер.")
         ok = False
     if thin > 0.3:
-        print(f"  ! В {thin:.0%} случаев на краю книги меньше вашего ордера.")
-        print("    Вы будете двигать цену собственной заявкой и стоять в очереди.")
+        print(f"  ! В {thin:.0%} случаев на краю книги меньше вашего ордера ({args.notional:g}$).")
+        print("    Проблема не во входе — первым в очереди стоять как раз хорошо.")
+        print("    Проблема в выходе: закрывать позицию придётся через несколько")
+        print("    уровней стакана, и против такой крупной заявки торгуют избирательно.")
+        print(f"    Уменьшите размер до {dq[0]:.1f} USDT и перезапустите монитор.")
+        ok = False
+    if exits and med_exit > half_spread:
+        print(f"  ! Выход стоит {med_exit:.2f} bp при заработке {half_spread:.2f} bp с одной")
+        print("    стороны. Одна вынужденная ликвидация съест несколько удачных кругов.")
         ok = False
     if adverse > 0.5:
         print(f"  ! За минуту удержания цена уходит дальше вашего края в {adverse:.0%} случаев.")
