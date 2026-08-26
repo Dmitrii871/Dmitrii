@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------
+# Копия -> config.yaml. Значения ниже намеренно безопасные.
+# testnet: true и dry_run: true = ноль реальных денег в обороте.
+# ---------------------------------------------------------------
+symbol: ETHUSDT
+category: linear          # linear = USDT-бессрочные
+testnet: true             # false -> реальные деньги. Требует флага --live
+dry_run: true             # true -> ордера только логируются, не отправляются
+leverage: 3
+poll_seconds: 10
+log_level: INFO
+
+# Комиссии вашего VIP-уровня, в базисных пунктах (1 bp = 0.01%)
+fees:
+  maker_bps: 2.0
+  taker_bps: 5.5
+
+strategy:
+  name: signal            # signal | maker
+
+  # Режим 1: вход по совпадению индикаторов (те же, что у вас на графике)
+  signal:
+    interval: "30"        # минуты: 1 5 15 30 60 240 D
+    rsi_period: 14
+    rsi_buy: 35.0         # ниже -> сигнал в лонг
+    rsi_sell: 65.0        # выше -> сигнал в шорт
+    macd: [12, 26, 9]
+    bb_period: 20
+    bb_mult: 2.0
+    bb_buy: 0.15          # %B ниже -> перепроданность
+    bb_sell: 0.85
+    min_confluence: 2     # сколько индикаторов из 3 должны согласиться
+    order_notional_usdt: 25
+    take_profit_pct: 1.2
+    stop_loss_pct: 0.8
+    cooldown_bars: 2      # не входить повторно раньше, чем через N свечей
+
+  # Режим 2: маркет-мейкинг. Реальный оборот по ставке мейкера.
+  maker:
+    spread_bps: 8.0       # половина спреда от mid с каждой стороны
+    order_notional_usdt: 25
+    max_inventory_usdt: 60
+    refresh_bps: 3.0      # переставлять котировки при сдвиге mid на столько
+    inventory_skew: 1.0   # >0 -> при перекосе инвентаря котировки смещаются к его сокращению
+
+risk:
+  max_position_usdt: 60
+  max_daily_loss_usdt: 5.0      # достигнут -> бот закрывается и останавливается
+  min_free_margin_ratio: 0.25   # свободная маржа не ниже 25% от equity
+  max_orders_per_hour: 120
+  kill_switch_file: ./STOP      # создайте этот файл -> бот аккуратно остановится
