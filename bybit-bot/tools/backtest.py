@@ -102,9 +102,12 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     entry = 0.0
     last_entry_bar = -10**9
 
-    for i in range(warm, len(closes)):
-        window = closes[: i + 1]
+    # Голоса считаются один раз по всей истории: индикаторы причинные,
+    # результат идентичен побарному пересчёту (см. test_votes_series_matches_per_bar),
+    # но время падает с O(n^2) до O(n).
+    all_votes = strat.votes_series(closes)
 
+    for i in range(warm, len(closes)):
         # 1) сначала проверяем, не выбило ли открытую позицию на этой свече
         if pos_side is not None:
             if pos_side == "Buy":
@@ -126,7 +129,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
 
         # 2) затем ищем новый вход
         if pos_side is None and i - last_entry_bar >= strat.cooldown_bars:
-            longs, shorts, _ = strat.votes(window)
+            longs, shorts = all_votes[i]
             side = None
             if longs >= strat.min_confluence and longs > shorts:
                 side = "Buy"

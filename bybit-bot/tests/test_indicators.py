@@ -246,3 +246,19 @@ def test_reduce_only_orders_are_not_cancelled_as_leftovers():
     ctx = _ctx(DOWN, pos=pos)
     ctx.open_orders = [{"orderId": "1", "reduceOnly": True}]
     assert SignalStrategy({"entry_type": "post_only"}).decide(ctx) == []
+
+
+def test_votes_series_matches_per_bar():
+    """Пакетный расчёт обязан совпадать с побарным — иначе где-то утечка будущего.
+
+    Это главная страховка ускорения бэктеста: если пакетный вариант хоть на
+    одном баре отличается, значит индикатор увидел данные, которых на тот
+    момент не было.
+    """
+    import math
+    closes = [100 + 12 * math.sin(i / 7) + 4 * math.cos(i / 3) for i in range(400)]
+    strat = SignalStrategy({})
+    batch = strat.votes_series(closes)
+    for i in range(strat.warmup_bars(), len(closes)):
+        per_bar = strat.votes(closes[: i + 1])[:2]
+        assert batch[i] == per_bar, f"расхождение на баре {i}: {batch[i]} != {per_bar}"

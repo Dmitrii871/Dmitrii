@@ -115,6 +115,47 @@ class SignalStrategy(Strategy):
 
         return longs, shorts, snapshot
 
+    def votes_series(self, closes: list[float]) -> list[tuple[int, int]]:
+        """Голоса для КАЖДОГО бара за один проход.
+
+        Индикаторы причинные — значение на баре i зависит только от прошлого,
+        поэтому один расчёт по всей истории даёт ровно те же числа, что и
+        пересчёт на каждом баре, но за O(n) вместо O(n^2). Эквивалентность
+        проверяется тестом test_votes_series_matches_per_bar.
+        """
+        n = len(closes)
+        out: list[tuple[int, int]] = [(0, 0)] * n
+
+        r = rsi(closes, self.rsi_period)
+        r_off = n - len(r)
+        line, sig, hist = macd(closes, *self.macd_params)
+        h_off = n - len(hist)
+        b = bollinger_pct_b(closes, self.bb_period, self.bb_mult)
+        b_off = n - len(b)
+
+        for i in range(n):
+            longs = shorts = 0
+            j = i - r_off
+            if 0 <= j < len(r):
+                if r[j] <= self.rsi_buy:
+                    longs += 1
+                elif r[j] >= self.rsi_sell:
+                    shorts += 1
+            k = i - h_off
+            if 1 <= k < len(hist):
+                if hist[k - 1] <= 0 < hist[k]:
+                    longs += 1
+                elif hist[k - 1] >= 0 > hist[k]:
+                    shorts += 1
+            m = i - b_off
+            if 0 <= m < len(b):
+                if b[m] <= self.bb_buy:
+                    longs += 1
+                elif b[m] >= self.bb_sell:
+                    shorts += 1
+            out[i] = (longs, shorts)
+        return out
+
     # ------------------------------------------------------------------ решение
     def decide(self, ctx: Context) -> list[Action]:
         closes = ctx.md.closes
