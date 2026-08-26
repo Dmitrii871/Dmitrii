@@ -1,7 +1,16 @@
+# Секреты и личные настройки — НИКОГДА не коммитить
 .env
+config.yaml
+diagnostics.json
+
+# Рабочие файлы
 STOP
-__pycache__/
-*.pyc
 state.json
 *.log
+*.csv
+
+# Python
+__pycache__/
+*.pyc
 .venv/
+.pytest_cache/
