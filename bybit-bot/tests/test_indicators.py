@@ -221,3 +221,28 @@ def test_maker_quotes_both_sides():
     bid = next(a for a in actions if a.side == "Buy")
     ask = next(a for a in actions if a.side == "Sell")
     assert bid.price < ask.price, "бид должен быть ниже аска"
+
+
+def test_partial_fill_leftover_is_cancelled():
+    """Позиция открыта, часть заявки висит — остаток надо снять.
+
+    Иначе позиция тихо вырастет сверх расчёта, а TP/SL были посчитаны
+    от исходного размера.
+    """
+    from decimal import Decimal
+    from bot.models import Position
+    half = Position("ETHUSDT", "Buy", Decimal("0.01"), Decimal(2463), Decimal(0), Decimal(2463))
+    ctx = _ctx(DOWN, pos=half)
+    ctx.open_orders = [{"orderId": "1", "reduceOnly": False}]
+    actions = SignalStrategy({"entry_type": "post_only"}).decide(ctx)
+    assert [a.kind for a in actions] == ["cancel_all"]
+
+
+def test_reduce_only_orders_are_not_cancelled_as_leftovers():
+    """Заявки на закрытие — не остаток входа, их трогать нельзя."""
+    from decimal import Decimal
+    from bot.models import Position
+    pos = Position("ETHUSDT", "Buy", Decimal("0.02"), Decimal(2463), Decimal(0), Decimal(2463))
+    ctx = _ctx(DOWN, pos=pos)
+    ctx.open_orders = [{"orderId": "1", "reduceOnly": True}]
+    assert SignalStrategy({"entry_type": "post_only"}).decide(ctx) == []

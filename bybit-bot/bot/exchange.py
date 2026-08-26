@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
+import uuid
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any
 
@@ -15,10 +17,38 @@ from .models import Account, Action, Instrument, MarketData, Position
 
 log = logging.getLogger(__name__)
 
+# Временные сбои: имеет смысл повторить с задержкой.
 RETRYABLE = (
     "timeout", "timed out", "connection", "temporarily", "too many visits",
     "system busy", "service unavailable", "502", "503", "504",
+    "10006",            # превышен лимит запросов
+    "10016",            # внутренняя ошибка биржи
 )
+
+# Повторять бессмысленно и опасно: проблема в ключах или в конфигурации.
+# Бот должен остановиться, а не долбить биржу неверной подписью.
+FATAL = (
+    "10003",  # неверный API-ключ
+    "10004",  # неверная подпись
+    "10005",  # нет прав у ключа
+    "10010",  # IP не в белом списке
+    "33004",  # срок действия ключа истёк
+    "invalid api key", "api key is invalid", "api_key expire",
+    "unmatched ip", "permission denied",
+)
+
+# Расхождение часов больше этого — подпись начнёт отвергаться биржей
+MAX_CLOCK_DRIFT_MS = 2_000
+# Данные старше стольких секунд считаем протухшими и не торгуем по ним
+MAX_DATA_AGE_SECONDS = 120
+
+
+class FatalExchangeError(RuntimeError):
+    """Ошибка, которую нельзя исправить повтором: ключи, права, IP."""
+
+
+class StaleDataError(RuntimeError):
+    """Биржа отдала устаревшие данные — торговать по ним нельзя."""
 
 
 def _d(value: Any, default: str = "0") -> Decimal:
@@ -58,22 +88,60 @@ class Exchange:
 
     # ---------------------------------------------------------------- вызовы
     def _call(self, method: str, **kwargs) -> dict:
-        """Вызов API с экспоненциальным ретраем на временных ошибках."""
+        """Вызов API с классификацией ошибок и повтором временных сбоев.
+
+        Три исхода вместо одного: фатальные ошибки (ключи, права, IP)
+        поднимаются сразу и останавливают бота; временные повторяются
+        с экспоненциальной задержкой и случайным разбросом; остальные
+        поднимаются как есть.
+
+        Разброс задержки обязателен: без него несколько ботов или несколько
+        повторов синхронизируются и бьются в лимит запросов одновременно.
+        """
         last_err: Exception | None = None
         for attempt in range(4):
             try:
                 resp = getattr(self.http, method)(**kwargs)
-                if resp.get("retCode") != 0:
-                    raise RuntimeError(f"{method}: {resp.get('retMsg')} (retCode={resp.get('retCode')})")
+                code = resp.get("retCode")
+                if code != 0:
+                    raise RuntimeError(f"{method}: {resp.get('retMsg')} (retCode={code})")
                 return resp.get("result", {})
-            except Exception as exc:  # noqa: BLE001 — классифицируем по тексту
+            except Exception as exc:  # noqa: BLE001 — классифицируем по тексту и коду
                 last_err = exc
-                if not any(m in str(exc).lower() for m in RETRYABLE) or attempt == 3:
+                text = str(exc).lower()
+                if any(m in text for m in FATAL):
+                    raise FatalExchangeError(
+                        f"{method}: {exc}\n"
+                        "Проверьте: ключ от того же контура (testnet/mainnet), "
+                        "права Trade включены, ваш IP в белом списке ключа."
+                    ) from exc
+                if not any(m in text for m in RETRYABLE) or attempt == 3:
                     raise
-                delay = 2 ** attempt
-                log.warning("%s: %s — повтор через %ss", method, exc, delay)
+                delay = 2 ** attempt + random.uniform(0, 1)
+                log.warning("%s: %s — повтор через %.1fs", method, exc, delay)
                 time.sleep(delay)
         raise RuntimeError(f"{method} не удался") from last_err
+
+    def check_clock(self) -> float:
+        """Расхождение локальных часов с биржей.
+
+        Bybit отвергает запросы, чей timestamp вне recv_window. Часы VPS
+        уходят на секунды в сутки, и ошибка приходит как "invalid signature",
+        которая про часы не говорит ни слова — поэтому проверяем явно.
+        """
+        local_before = time.time() * 1000
+        res = self._call("get_server_time")
+        local_after = time.time() * 1000
+        server_ms = float(res.get("timeNano", 0)) / 1e6 or float(res.get("timeSecond", 0)) * 1000
+        drift = server_ms - (local_before + local_after) / 2
+        if abs(drift) > MAX_CLOCK_DRIFT_MS:
+            raise FatalExchangeError(
+                f"Часы разошлись с биржей на {drift:.0f} мс (порог {MAX_CLOCK_DRIFT_MS}). "
+                "Биржа начнёт отвергать подписи. Синхронизируйте время: "
+                "sudo timedatectl set-ntp true"
+            )
+        log.info("Расхождение часов с биржей: %.0f мс — в норме", drift)
+        return drift
 
     # ------------------------------------------------------------ справочник
     def instrument(self) -> Instrument:
@@ -137,14 +205,43 @@ class Exchange:
         )["list"]
         # Bybit отдаёт свечи от новых к старым; последняя ещё не закрыта — отбрасываем
         rows = list(reversed(kl))[:-1]
-        return MarketData(
+        if not rows:
+            raise StaleDataError("биржа не вернула ни одной закрытой свечи")
+
+        md = MarketData(
             symbol=self.symbol,
             bid=_d(tick["bid1Price"]),
             ask=_d(tick["ask1Price"]),
             last=_d(tick["lastPrice"]),
             closes=[float(r[4]) for r in rows],
-            bar_time=int(rows[-1][0]) if rows else 0,
+            bar_time=int(rows[-1][0]),
         )
+        self._assert_fresh(md, interval)
+        if md.bid <= 0 or md.ask <= 0 or md.ask <= md.bid:
+            raise StaleDataError(f"некорректная книга: бид {md.bid}, аск {md.ask}")
+        return md
+
+    @staticmethod
+    def _interval_ms(interval: str) -> int:
+        table = {"D": 86_400_000, "W": 604_800_000, "M": 2_592_000_000}
+        return table.get(interval.upper(), 0) or int(interval) * 60_000
+
+    def _assert_fresh(self, md: MarketData, interval: str) -> None:
+        """Поток данных может тихо застыть: ошибки нет, а цена часовой давности.
+
+        Проверяем возраст последней закрытой свечи. Нормальный возраст —
+        меньше одного интервала (мы внутри текущей формирующейся свечи).
+        """
+        step = self._interval_ms(interval)
+        close_time = md.bar_time + step
+        age_s = (time.time() * 1000 - close_time) / 1000
+        limit_s = step / 1000 + MAX_DATA_AGE_SECONDS
+        if age_s > limit_s:
+            raise StaleDataError(
+                f"данные устарели: последняя закрытая свеча старше "
+                f"{age_s / 60:.1f} мин при допуске {limit_s / 60:.1f} мин. "
+                "Торговля приостановлена до восстановления потока."
+            )
 
     def position(self) -> Position:
         res = self._call("get_positions", category=self.category, symbol=self.symbol)
@@ -199,12 +296,35 @@ class Exchange:
             reduce_only=True, reason=action.reason or "закрытие позиции",
         ))
 
+    def _order_exists(self, link_id: str) -> bool:
+        """Долетел ли ордер до биржи. Спрашиваем по своему идентификатору."""
+        for method in ("get_open_orders", "get_order_history"):
+            try:
+                res = self._call(method, category=self.category,
+                                 symbol=self.symbol, orderLinkId=link_id)
+                if res.get("list"):
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Сверка через %s не удалась: %s", method, exc)
+        return False
+
     def _place(self, action: Action) -> None:
         inst = self.instrument()
         qty = quantize(action.qty or Decimal(0), inst.qty_step, ROUND_DOWN)
         if qty < inst.min_qty:
             log.warning(
                 "Ордер пропущен: количество %s меньше минимума %s", qty, inst.min_qty
+            )
+            return
+
+        # Второй фильтр биржи помимо минимального количества: минимальная сумма.
+        # Без этой проверки ордер уйдёт и вернётся отказом 170136.
+        ref_price = action.price or self.market_price()
+        notional = qty * ref_price
+        if notional < inst.min_notional:
+            log.warning(
+                "Ордер пропущен: сумма %.2f USDT меньше минимума %.2f USDT",
+                float(notional), float(inst.min_notional),
             )
             return
 
@@ -225,17 +345,64 @@ class Exchange:
         if action.stop_loss is not None:
             params["stopLoss"] = str(quantize(action.stop_loss, inst.tick_size, ROUND_HALF_UP))
 
+        # Свой идентификатор ордера — защита от дублей. Если ответ биржи
+        # потерялся в сети, повторная отправка с тем же orderLinkId будет
+        # отклонена как дубликат, а не создаст вторую позицию.
+        link_id = f"bot-{uuid.uuid4().hex[:24]}"
+        params["orderLinkId"] = link_id
+
         if self.dry_run:
             log.info("[DRY] %s | %s", action.describe(), action.reason)
             return
 
         try:
-            res = self._call("place_order", **params)
-            log.info("Ордер %s: %s | %s", res.get("orderId", "?"), action.describe(), action.reason)
+            res = self._place_once(params)
+            log.info("Ордер %s: %s | %s", res.get("orderId", "?"),
+                     action.describe(), action.reason)
         except Exception as exc:  # noqa: BLE001
             msg = str(exc).lower()
             # PostOnly, который сразу стал бы тейкером, биржа отклоняет — это норма
             if "post only" in msg or "would immediately match" in msg:
                 log.debug("PostOnly отклонён (стал бы тейкером): %s", action.describe())
                 return
+            if "duplicate" in msg or "orderlinkid" in msg:
+                log.info("Ордер уже был принят биржей (дубликат %s) — повтор не нужен", link_id)
+                return
             raise
+
+    def _place_once(self, params: dict) -> dict:
+        """Отправка ордера без слепого повтора.
+
+        Обычный ретрай здесь опасен: на таймауте ордер мог уже исполниться,
+        и повтор открыл бы вторую позицию. Поэтому при неясном сбое сначала
+        спрашиваем биржу, долетел ли ордер, и только потом решаем.
+        """
+        link_id = params["orderLinkId"]
+        try:
+            resp = self.http.place_order(**params)
+            if resp.get("retCode") != 0:
+                raise RuntimeError(
+                    f"place_order: {resp.get('retMsg')} (retCode={resp.get('retCode')})")
+            return resp.get("result", {})
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc).lower()
+            if any(m in text for m in FATAL):
+                raise FatalExchangeError(f"place_order: {exc}") from exc
+            if not any(m in text for m in RETRYABLE):
+                raise
+            log.warning("Ордер отправлен, ответ не получен (%s). Сверяюсь с биржей...", exc)
+            time.sleep(2)
+            if self._order_exists(link_id):
+                log.info("Ордер %s всё-таки принят биржей — повтор не нужен", link_id)
+                return {"orderId": "reconciled", "orderLinkId": link_id}
+            log.info("Ордер %s до биржи не долетел — отправляю повторно", link_id)
+            resp = self.http.place_order(**params)
+            if resp.get("retCode") != 0:
+                raise RuntimeError(
+                    f"place_order (повтор): {resp.get('retMsg')} "
+                    f"(retCode={resp.get('retCode')})") from exc
+            return resp.get("result", {})
+
+    def market_price(self) -> Decimal:
+        tick = self._call("get_tickers", category=self.category, symbol=self.symbol)["list"][0]
+        return _d(tick["lastPrice"])

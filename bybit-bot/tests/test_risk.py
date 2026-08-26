@@ -129,3 +129,55 @@ def test_hourly_order_cap_enforced():
         assert "в час" in str(exc)
     else:
         raise AssertionError("лимит ордеров в час должен срабатывать")
+
+
+# ---------------------------------------------------------------- защита биржевого слоя
+def test_stale_data_detected():
+    """Поток данных может застыть молча: ошибки нет, а цена часовой давности."""
+    import time as _t
+    from bot.exchange import Exchange, StaleDataError
+    from bot.models import MarketData
+
+    ex = Exchange.__new__(Exchange)          # без сети
+    old_bar = int((_t.time() - 3 * 3600) * 1000)
+    md = MarketData("ETHUSDT", Decimal("2463"), Decimal("2464"),
+                    Decimal("2463"), [1.0], old_bar)
+    try:
+        ex._assert_fresh(md, "60")
+    except StaleDataError as exc:
+        assert "устарели" in str(exc)
+    else:
+        raise AssertionError("свеча трёхчасовой давности должна считаться протухшей")
+
+
+def test_fresh_data_accepted():
+    import time as _t
+    from bot.exchange import Exchange
+    from bot.models import MarketData
+
+    ex = Exchange.__new__(Exchange)
+    recent = int((_t.time() - 600) * 1000)   # закрылась 10 минут назад
+    ex._assert_fresh(MarketData("ETHUSDT", Decimal("2463"), Decimal("2464"),
+                                Decimal("2463"), [1.0], recent), "60")
+
+
+def test_interval_ms_parsing():
+    from bot.exchange import Exchange
+    assert Exchange._interval_ms("3") == 180_000
+    assert Exchange._interval_ms("60") == 3_600_000
+    assert Exchange._interval_ms("D") == 86_400_000
+
+
+def test_quantize_never_rounds_qty_up():
+    """Округление количества вверх = ордер больше, чем позволяет депозит."""
+    from bot.exchange import quantize
+    assert quantize(Decimal("0.02749"), Decimal("0.01")) == Decimal("0.02")
+    assert quantize(Decimal("0.00999"), Decimal("0.01")) == Decimal("0.00")
+
+
+def test_fatal_and_retryable_codes_do_not_overlap():
+    """Фатальную ошибку нельзя повторять, временную нельзя считать фатальной."""
+    from bot.exchange import FATAL, RETRYABLE
+    assert not (set(FATAL) & set(RETRYABLE))
+    assert "10006" in RETRYABLE, "лимит запросов повторяется"
+    assert "10004" in FATAL, "неверная подпись не лечится повтором"

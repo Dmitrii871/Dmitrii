@@ -117,6 +117,16 @@ class SignalStrategy(Strategy):
         if len(closes) < self.warmup_bars():
             return []
 
+        # Частичное исполнение: позиция уже открыта, но часть заявки висит.
+        # Остаток надо снять — иначе позиция будет тихо расти сверх расчёта,
+        # а TP/SL считались от исходного размера.
+        if not ctx.position.is_flat and ctx.open_orders:
+            leftovers = [o for o in ctx.open_orders if not o.get("reduceOnly")]
+            if leftovers:
+                self._pending_since = None
+                return [Action(kind="cancel_all",
+                               reason="снятие остатка частично исполненной заявки")]
+
         # Незалившаяся лимитка на вход устаревает: сигнал был на своей цене,
         # держать её вечно — значит войти уже в другом рынке.
         if self.entry_type == "post_only" and ctx.position.is_flat and ctx.open_orders:

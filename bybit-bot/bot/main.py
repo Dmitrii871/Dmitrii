@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from .exchange import Exchange
+from .exchange import Exchange, FatalExchangeError, StaleDataError
 from .models import Action, RiskHalt, RiskReject
 from .risk import RiskManager
 from .strategies import build
@@ -61,6 +61,7 @@ def run(cfg: dict, dry_run: bool) -> int:
 
     ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""), dry_run)
     risk = RiskManager(cfg["risk"])
+    ex.check_clock()
     inst = ex.instrument()
     ex.check_position_mode()
     leverage = int(cfg.get("leverage", 3))
@@ -73,6 +74,7 @@ def run(cfg: dict, dry_run: bool) -> int:
     poll = int(cfg.get("poll_seconds", 10))
     heartbeat_every = max(1, int(cfg.get("heartbeat_seconds", 300)) // max(poll, 1))
     tick = 0
+    stale_streak = 0
     start_equity: float | None = None
     log.info("Стратегия '%s' запущена. Ctrl+C или файл %s для остановки.",
              name, cfg["risk"].get("kill_switch_file", "./STOP"))
@@ -112,6 +114,7 @@ def run(cfg: dict, dry_run: bool) -> int:
                     len(ctx.open_orders), ctx.md.spread_bps,
                 )
 
+            stale_streak = 0
             for action in strategy.decide(ctx):
                 try:
                     risk.validate(action, ctx.position, ctx.account, ctx.md.mid)
@@ -120,6 +123,21 @@ def run(cfg: dict, dry_run: bool) -> int:
                     continue
                 ex.execute(action)
 
+        except StaleDataError as exc:
+            # Данные протухли — не торгуем вслепую, но и не падаем:
+            # поток обычно восстанавливается сам.
+            log.warning("Пропуск цикла: %s", exc)
+            stale_streak += 1
+            if stale_streak >= 10:
+                log.error("Данные не обновляются %d циклов подряд — снимаю заявки.", stale_streak)
+                if not dry_run:
+                    ex.execute(Action(kind="cancel_all", reason="поток данных не восстановился"))
+                stale_streak = 0
+            time.sleep(poll)
+            continue
+        except FatalExchangeError as exc:
+            log.error("НЕИСПРАВИМАЯ ОШИБКА БИРЖИ: %s", exc)
+            return 3
         except RiskHalt as exc:
             log.error("ОСТАНОВКА ПО РИСКУ: %s", exc)
             if not dry_run:
