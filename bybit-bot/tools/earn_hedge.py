@@ -70,6 +70,8 @@ def main() -> int:
                     help="пары МОНЕТА=СТАВКА со страницы Earn, напр. BICO=106.83")
     ap.add_argument("--capital", type=float, default=500.0)
     ap.add_argument("--periods", type=int, default=200)
+    ap.add_argument("--leverage", type=int, default=1,
+                    help="плечо шорта: 1 — без плеча (половина капитала в маржу)")
     args = ap.parse_args()
 
     from pybit.unified_trading import HTTP
@@ -77,11 +79,19 @@ def main() -> int:
     http = HTTP(testnet=False)
     coins = parse_coins(args.coins)
 
-    print(f"\nКапитал {args.capital:.0f}$. Шорт в бессрочном полностью гасит ценовой риск,")
-    print("поэтому остаётся ставка Earn МИНУС фандинг, который платит шорт.\n")
+    L = max(args.leverage, 1)
+    spot = args.capital * L / (L + 1)
+    margin = args.capital - spot
+    print(f"\nКапитал {args.capital:.0f}$: {spot:.0f}$ монеты на споте в Earn, "
+          f"{margin:.0f}$ маржи под шорт того же размера (плечо {L}x).")
+    print("Шорт гасит ценовой риск. Ставка Earn начисляется на спот,")
+    print("фандинг — на размер шорта; обе — на одну и ту же сумму, а не на весь счёт.")
+    if L > 1:
+        print(f"Ликвидация шорта примерно при росте цены на +{100/L:.0f}%.")
+    print()
     print("=" * 78)
     print(f"  {'монета':<7} {'Earn':>8} {'фандинг факт':>13} {'медиана':>9} {'полож.':>7} "
-          f"{'ИТОГО':>8} {'$/год':>8}")
+          f"{'НА СЧЁТ':>8} {'$/год':>8}")
     print("  " + "-" * 74)
 
     rows = []
@@ -97,11 +107,13 @@ def main() -> int:
             continue
         f_apr, f_med, positive, n = res
         # Шорт получает положительный фандинг и платит отрицательный
-        net = earn + f_apr
+        # обе ставки начисляются на сумму spot, а не на весь капитал
+        income = spot * (earn + f_apr) / 100
+        net = income / args.capital * 100
         skew = "  !" if f_med != 0 and abs(f_apr / f_med) > 3 else ""
         rows.append((coin, earn, f_apr, f_med, positive, n, net))
         print(f"  {coin:<7} {earn:>7.2f}% {f_apr:>12.1f}% {f_med:>8.1f}% {positive:>6.0%} "
-              f"{net:>7.1f}% {net/100*args.capital:>7.2f}${skew}")
+              f"{net:>7.1f}% {income:>7.2f}${skew}")
 
     print("=" * 78)
     if not rows:

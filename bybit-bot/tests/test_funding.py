@@ -142,3 +142,21 @@ def test_hedge_must_use_realized_not_median_funding():
 def test_positive_funding_adds_to_earn():
     """Редкий случай, когда обе стороны в вашу пользу."""
     assert 17.26 + 10.9 > 6.82
+
+
+def test_both_rates_apply_to_spot_amount_not_whole_capital():
+    """Капитал делится: монета на споте и маржа под шорт.
+
+    Ставка Earn начисляется на спот, фандинг — на размер шорта, и это
+    одна и та же сумма. Применение обеих ставок ко ВСЕМУ счёту завышает
+    доход вдвое при отсутствии плеча.
+    """
+    cap, earn, fund = 500.0, 0.1847, 0.550
+    for lev, expected_pct in ((1, 36.7), (3, 55.1)):
+        spot = cap * lev / (lev + 1)
+        income = spot * (earn + fund)
+        assert abs(income / cap * 100 - expected_pct) < 0.2, f"плечо {lev}x"
+    # наивный расчёт на весь капитал завышает ровно вдвое при 1x
+    naive = cap * (earn + fund)
+    correct = cap / 2 * (earn + fund)
+    assert abs(naive / correct - 2.0) < 0.001
