@@ -66,3 +66,41 @@ def test_monthly_projection_scales_by_observed_days():
 
 def test_empty_history_returns_nothing():
     assert evaluate([], 8.0, LEG) == {}
+
+
+# ------------------------------------------------- концентрация дохода
+def test_even_flow_has_low_concentration():
+    """Ровный поток: верхние 10% выплат дают примерно 10% дохода."""
+    from tools.funding_detail import concentration
+    c = concentration([0.0001] * 200)
+    assert abs(c["top10"] - 0.10) < 0.02
+    assert abs(c["top25"] - 0.25) < 0.02
+
+
+def test_spiky_income_is_detected():
+    """Несколько всплесков среди мелочи должны дать концентрацию под 90%."""
+    from tools.funding_detail import concentration
+    c = concentration([0.00001] * 190 + [0.002] * 10)
+    assert c["top10"] > 0.85, "доход из редких событий обязан быть виден"
+
+
+def test_negative_rates_excluded_from_concentration():
+    """Концентрация считается по доходу, а не по убыткам."""
+    from tools.funding_detail import concentration
+    assert concentration([-0.001] * 50)["top10"] == 0.0
+
+
+def test_empty_history_concentration_is_zero():
+    from tools.funding_detail import concentration
+    assert concentration([])["top10"] == 0.0
+
+
+def test_median_and_mean_diverge_on_spiky_data():
+    """Расхождение медианы и среднего — первый признак всплесков.
+
+    Именно оно бросилось в глаза в таблице: у TACUSDT и ZROUSDT одинаковая
+    медиана 11%, а чистый доход отличался в 5.5 раза.
+    """
+    import statistics
+    spiky = [0.00001] * 190 + [0.002] * 10
+    assert statistics.mean(spiky) > statistics.median(spiky) * 5
