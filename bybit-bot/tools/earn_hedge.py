@@ -39,6 +39,44 @@ def parse_coins(items: list[str]) -> dict[str, float]:
     return out
 
 
+# Мелкие токены торгуются пачками: BTT -> 1000BTTUSDT, PEPE -> 1000PEPEUSDT.
+# Запрос по «голому» имени даёт другой контракт либо пустоту, и вся история
+# оказывается не про тот инструмент.
+SYMBOL_PREFIXES = ("", "1000", "10000", "1000000")
+
+
+def resolve_symbol(http, coin: str) -> tuple[str, float] | None:
+    """Найти реально торгуемый контракт и его суточный оборот."""
+    found = []
+    for pref in SYMBOL_PREFIXES:
+        sym = f"{pref}{coin}USDT"
+        try:
+            lst = http.get_instruments_info(category="linear", symbol=sym)["result"]["list"]
+        except Exception:  # noqa: BLE001
+            continue
+        if not lst or lst[0].get("status") != "Trading":
+            continue
+        try:
+            t = http.get_tickers(category="linear", symbol=sym)["result"]["list"][0]
+            turnover = float(t.get("turnover24h", 0))
+        except Exception:  # noqa: BLE001
+            turnover = 0.0
+        found.append((sym, turnover))
+    if not found:
+        return None
+    # если вариантов несколько, берём самый ликвидный — он и есть настоящий
+    return max(found, key=lambda x: x[1])
+
+
+def current_funding(http, symbol: str, interval_h: float) -> float | None:
+    """Ставка ПРЯМО СЕЙЧАС: история может расходиться с текущим режимом."""
+    try:
+        t = http.get_tickers(category="linear", symbol=symbol)["result"]["list"][0]
+        return float(t["fundingRate"]) * (8760 / interval_h) * 100
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def funding_apr(http, symbol: str, periods: int) -> tuple[float, float, float, int] | None:
     """Возвращает (фактические годовые, медианные годовые, доля положительных, выплат).
 
@@ -72,6 +110,8 @@ def main() -> int:
     ap.add_argument("--periods", type=int, default=200)
     ap.add_argument("--leverage", type=int, default=1,
                     help="плечо шорта: 1 — без плеча (половина капитала в маржу)")
+    ap.add_argument("--min-turnover", type=float, default=20_000_000.0,
+                    help="минимальный суточный оборот контракта, USDT")
     args = ap.parse_args()
 
     from pybit.unified_trading import HTTP
@@ -96,24 +136,34 @@ def main() -> int:
 
     rows = []
     for coin, earn in sorted(coins.items(), key=lambda kv: -kv[1]):
-        sym = f"{coin}USDT"
+        resolved = resolve_symbol(http, coin)
+        if resolved is None:
+            print(f"  {coin:<7} {earn:>7.2f}%  нет торгуемого бессрочного контракта — хедж невозможен")
+            continue
+        sym, turnover = resolved
+        if turnover < args.min_turnover:
+            print(f"  {coin:<7} {earn:>7.2f}%  оборот {turnover/1e6:.2f} млн$ ниже порога "
+                  f"{args.min_turnover/1e6:.0f} млн$ — вход и выход съедят доход")
+            continue
         try:
             res = funding_apr(http, sym, args.periods)
         except Exception as exc:  # noqa: BLE001
-            print(f"  {coin:<8} {earn:>8.2f}%  нет бессрочного контракта ({exc})")
+            print(f"  {coin:<7} {earn:>7.2f}%  ошибка запроса ({exc})")
             continue
         if res is None:
-            print(f"  {coin:<8} {earn:>8.2f}%  нет данных по фандингу — хедж невозможен")
+            print(f"  {coin:<7} {earn:>7.2f}%  нет данных по фандингу — хедж невозможен")
             continue
         f_apr, f_med, positive, n = res
+
         # Шорт получает положительный фандинг и платит отрицательный
         # обе ставки начисляются на сумму spot, а не на весь капитал
         income = spot * (earn + f_apr) / 100
         net = income / args.capital * 100
         skew = "  !" if f_med != 0 and abs(f_apr / f_med) > 3 else ""
         rows.append((coin, earn, f_apr, f_med, positive, n, net))
+        tag = "" if sym == f"{coin}USDT" else f"  [{sym}]"
         print(f"  {coin:<7} {earn:>7.2f}% {f_apr:>12.1f}% {f_med:>8.1f}% {positive:>6.0%} "
-              f"{net:>7.1f}% {income:>7.2f}${skew}")
+              f"{net:>7.1f}% {income:>7.2f}${skew}{tag}")
 
     print("=" * 78)
     if not rows:

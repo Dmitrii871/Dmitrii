@@ -160,3 +160,54 @@ def test_both_rates_apply_to_spot_amount_not_whole_capital():
     naive = cap * (earn + fund)
     correct = cap / 2 * (earn + fund)
     assert abs(naive / correct - 2.0) < 0.001
+
+
+# ------------------------------------- поиск правильного контракта
+def test_symbol_prefixes_cover_bundled_contracts():
+    """Мелкие токены торгуются пачками: BTT -> 1000BTTUSDT.
+
+    Запрос по «голому» имени даёт другой контракт либо пустоту,
+    и вся история фандинга оказывается не про тот инструмент.
+    """
+    from tools.earn_hedge import SYMBOL_PREFIXES
+    assert "" in SYMBOL_PREFIXES, "обычные символы тоже должны проверяться"
+    assert "1000" in SYMBOL_PREFIXES, "пачки по 1000 — самый частый случай"
+    variants = [f"{p}BTTUSDT" for p in SYMBOL_PREFIXES]
+    assert "1000BTTUSDT" in variants
+
+
+def test_resolver_picks_most_liquid_variant():
+    """Если контрактов несколько, настоящий — тот, где идёт торговля."""
+    from tools.earn_hedge import resolve_symbol
+
+    class FakeHTTP:
+        def get_instruments_info(self, category, symbol):
+            live = {"BTTUSDT": "Closed", "1000BTTUSDT": "Trading"}
+            st = live.get(symbol)
+            return {"result": {"list": [{"symbol": symbol, "status": st}] if st else []}}
+
+        def get_tickers(self, category, symbol):
+            vol = {"1000BTTUSDT": "304689.67"}.get(symbol, "0")
+            return {"result": {"list": [{"turnover24h": vol}]}}
+
+    sym, turnover = resolve_symbol(FakeHTTP(), "BTT")
+    assert sym == "1000BTTUSDT", "закрытый контракт брать нельзя"
+    assert abs(turnover - 304689.67) < 0.01
+
+
+def test_resolver_returns_none_when_nothing_trades():
+    from tools.earn_hedge import resolve_symbol
+
+    class Empty:
+        def get_instruments_info(self, category, symbol):
+            return {"result": {"list": []}}
+
+        def get_tickers(self, category, symbol):
+            return {"result": {"list": []}}
+
+    assert resolve_symbol(Empty(), "NOPE") is None
+
+
+def test_thin_turnover_disqualifies():
+    """Оборот 304 тыс$ в сутки против порога 20 млн — контракт не годится."""
+    assert 304_689.67 < 20_000_000.0
