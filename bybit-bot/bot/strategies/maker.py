@@ -29,19 +29,23 @@ class MakerStrategy(Strategy):
         self.refresh_bps = float(cfg.get("refresh_bps", 3.0))
         self.skew = float(cfg.get("inventory_skew", 1.0))
         self._quoted_mid: Decimal | None = None
+        self._warned = False
+        self._depth_warned = False
+        self.maker_bps = 2.0
 
     def warmup_bars(self) -> int:
         return 0
 
     def validate(self, fees: dict) -> None:
-        maker_bps = float(fees.get("maker_bps", 2.0))
-        if self.spread_bps <= maker_bps:
+        self.maker_bps = float(fees.get("maker_bps", 2.0))
+        if self.spread_bps <= self.maker_bps:
             raise ValueError(
                 f"spread_bps={self.spread_bps} не покрывает комиссию мейкера "
-                f"{maker_bps} bp с каждой стороны. Полный круг стоит {2*maker_bps:.1f} bp — "
-                f"поставьте spread_bps минимум {maker_bps*2:.1f}, лучше выше."
+                f"{self.maker_bps} bp с каждой стороны. Полный круг стоит "
+                f"{2*self.maker_bps:.1f} bp — поставьте spread_bps минимум "
+                f"{self.maker_bps*2:.1f}, лучше выше."
             )
-        edge = 2 * (self.spread_bps - maker_bps)
+        edge = 2 * (self.spread_bps - self.maker_bps)
         log.info(
             "Ожидаемая маржа на полный круг: %.1f bp (%.4f%%) до учёта риска движения цены",
             edge, edge / 100,
@@ -51,6 +55,36 @@ class MakerStrategy(Strategy):
         mid = ctx.md.mid
         if mid <= 0:
             return []
+
+        # ГЛАВНАЯ ПРОВЕРКА МАРКЕТ-МЕЙКИНГА.
+        # Заработок мейкера — это рыночный спред минус комиссия в обе стороны.
+        # На ликвидных парах вроде ETHUSDT спред составляет доли базисного
+        # пункта, а комиссия мейкера — 2 bp с каждой стороны. Котировать там
+        # при розничной ставке значит платить бирже за каждую сделку.
+        # Инструмент выбирается под ставку комиссии, а не наоборот.
+        maker_bps = getattr(self, "maker_bps", ctx.maker_bps)
+        round_trip = 2 * maker_bps
+        if ctx.md.spread_bps < round_trip:
+            if not self._warned:
+                self._warned = True
+                log.error(
+                    "МАРКЕТ-МЕЙКИНГ ЗДЕСЬ УБЫТОЧЕН: рыночный спред %.3f bp, "
+                    "а круг по комиссии мейкера стоит %.1f bp. Разница %.2f bp "
+                    "с каждой сделки уходит бирже. Котировки не выставляются. "
+                    "Нужен инструмент со спредом шире %.1f bp либо ставка мейкера ниже.",
+                    ctx.md.spread_bps, round_trip, round_trip - ctx.md.spread_bps, round_trip,
+                )
+            return [Action(kind="cancel_all", reason="спред уже комиссии — не котируем")]
+        self._warned = False
+
+        # Котировать глубже рынка бессмысленно: заявка не исполнится.
+        if self.spread_bps > ctx.md.spread_bps * 4 and not self._depth_warned:
+            self._depth_warned = True
+            log.warning(
+                "spread_bps=%.1f при рыночном спреде %.3f bp: котировки лягут "
+                "глубоко в книгу и почти не будут исполняться.",
+                self.spread_bps, ctx.md.spread_bps,
+            )
 
         # Переставляем котировки только когда рынок реально ушёл —
         # иначе сожжём лимит запросов и получим отказы биржи.

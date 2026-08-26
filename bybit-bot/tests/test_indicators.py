@@ -214,8 +214,22 @@ def test_cooldown_does_not_block_first_entry():
 
 
 def test_maker_quotes_both_sides():
+    """Котировки с обеих сторон — но только там, где спред это оправдывает."""
+    from decimal import Decimal
+    from bot.models import Account, Instrument, MarketData, Position
+    from bot.strategies.base import Context
     from bot.strategies.maker import MakerStrategy
-    actions = MakerStrategy({"spread_bps": 8, "order_notional_usdt": 25}).decide(_ctx([]))
+
+    strat = MakerStrategy({"spread_bps": 8, "order_notional_usdt": 25})
+    strat.validate({"maker_bps": 2.0})
+    ctx = Context(                       # спред 20 bp, круг по комиссии 4 bp
+        md=MarketData("ALTUSDT", Decimal("99.90"), Decimal("100.10"), Decimal("100.0")),
+        position=Position("ALTUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(40), Decimal(23)),
+        instrument=Instrument("ALTUSDT", Decimal("0.01"), Decimal("0.01"),
+                              Decimal("0.01"), Decimal(5)),
+    )
+    actions = strat.decide(ctx)
     sides = [a.side for a in actions if a.kind == "limit"]
     assert sorted(sides) == ["Buy", "Sell"]
     bid = next(a for a in actions if a.side == "Buy")
@@ -297,3 +311,37 @@ def test_momentum_buys_strength():
     """В трендовом режиме растущий рынок даёт сигнал в лонг, а не в шорт."""
     actions = SignalStrategy({"mode": "momentum", "min_confluence": 2}).decide(_ctx(UP))
     assert [a.side for a in actions] == ["Buy"]
+
+
+def test_maker_refuses_to_quote_when_spread_below_fees():
+    """Спред уже комиссии = гарантированный убыток с каждой сделки."""
+    from decimal import Decimal
+    from bot.strategies.maker import MakerStrategy
+    strat = MakerStrategy({"spread_bps": 8.0, "order_notional_usdt": 25})
+    strat.validate({"maker_bps": 2.0})
+    # реальная книга ETHUSDT: спред 0.02 USDT на 2463 = 0.081 bp
+    ctx = _ctx([])
+    actions = strat.decide(ctx)
+    assert [a.kind for a in actions] == ["cancel_all"], \
+        "при спреде уже комиссии бот обязан снять котировки, а не выставлять"
+
+
+def test_maker_quotes_when_spread_is_wide_enough():
+    """На широком спреде маркет-мейкинг разрешён."""
+    from decimal import Decimal
+    from bot.models import Account, Instrument, MarketData, Position
+    from bot.strategies.base import Context
+    from bot.strategies.maker import MakerStrategy
+
+    strat = MakerStrategy({"spread_bps": 8.0, "order_notional_usdt": 25})
+    strat.validate({"maker_bps": 2.0})
+    # спред 20 bp — вчетверо шире круга по комиссии
+    ctx = Context(
+        md=MarketData("ALTUSDT", Decimal("99.90"), Decimal("100.10"), Decimal("100.0")),
+        position=Position("ALTUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(40), Decimal(23)),
+        instrument=Instrument("ALTUSDT", Decimal("0.01"), Decimal("0.01"),
+                              Decimal("0.01"), Decimal(5)),
+    )
+    sides = [a.side for a in strat.decide(ctx) if a.kind == "limit"]
+    assert sorted(sides) == ["Buy", "Sell"]
