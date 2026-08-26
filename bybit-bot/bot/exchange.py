@@ -190,9 +190,18 @@ class Exchange:
             )
             log.info("Плечо установлено: %sx", leverage)
         except Exception as exc:  # noqa: BLE001
-            # "leverage not modified" — не ошибка, значение уже такое
-            if "not modified" in str(exc).lower():
+            msg = str(exc).lower()
+            # "not modified" — значение уже такое, это не ошибка.
+            # С открытой позицией Bybit менять плечо не даёт — тоже не повод падать:
+            # работаем с тем, что есть, но говорим об этом громко.
+            if "not modified" in msg or "110043" in msg:
                 log.info("Плечо уже %sx", leverage)
+            elif "position" in msg or "110026" in msg:
+                log.warning(
+                    "Плечо не изменено на %sx: есть открытая позиция. "
+                    "Бот продолжит с текущим плечом — закройте позицию и "
+                    "перезапустите, если нужно именно %sx.", leverage, leverage,
+                )
             else:
                 raise
 
@@ -310,23 +319,34 @@ class Exchange:
 
     def _place(self, action: Action) -> None:
         inst = self.instrument()
-        qty = quantize(action.qty or Decimal(0), inst.qty_step, ROUND_DOWN)
-        if qty < inst.min_qty:
-            log.warning(
-                "Ордер пропущен: количество %s меньше минимума %s", qty, inst.min_qty
-            )
-            return
+        raw = action.qty or Decimal(0)
 
-        # Второй фильтр биржи помимо минимального количества: минимальная сумма.
-        # Без этой проверки ордер уйдёт и вернётся отказом 170136.
-        ref_price = action.price or self.market_price()
-        notional = qty * ref_price
-        if notional < inst.min_notional:
-            log.warning(
-                "Ордер пропущен: сумма %.2f USDT меньше минимума %.2f USDT",
-                float(notional), float(inst.min_notional),
-            )
-            return
+        if action.reduce_only:
+            # Закрытие позиции НЕ фильтруется минимальным лотом и минимальной
+            # суммой: биржа разрешает закрыть остаток любого размера, а вот
+            # округление вниз превратило бы 0.005 в ноль и заперло бы позицию.
+            qty = quantize(raw, inst.qty_step, ROUND_DOWN)
+            if qty <= 0:
+                qty = raw           # остаток меньше шага — отдаём как есть
+            if qty <= 0:
+                log.warning("Нечего закрывать: количество %s", raw)
+                return
+        else:
+            qty = quantize(raw, inst.qty_step, ROUND_DOWN)
+            if qty < inst.min_qty:
+                log.warning(
+                    "Ордер пропущен: количество %s меньше минимума %s", qty, inst.min_qty
+                )
+                return
+            # Второй фильтр биржи помимо минимального количества: минимальная
+            # сумма. Без проверки ордер уйдёт и вернётся отказом.
+            notional = qty * (action.price or self.market_price())
+            if notional < inst.min_notional:
+                log.warning(
+                    "Ордер пропущен: сумма %.2f USDT меньше минимума %.2f USDT",
+                    float(notional), float(inst.min_notional),
+                )
+                return
 
         params: dict[str, Any] = {
             "category": self.category,

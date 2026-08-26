@@ -26,6 +26,10 @@ class RiskManager:
         self._day_equity: Decimal | None = None
         self._day: str = ""
         self._order_times: list[float] = []
+        # Серия убытков подряд — признак того, что режим рынка сменился
+        # и стратегия перестала работать. 0 отключает предохранитель.
+        self.max_loss_streak = int(cfg.get("max_loss_streak", 5))
+        self._loss_streak = 0
 
     @staticmethod
     def _today() -> str:
@@ -99,7 +103,9 @@ class RiskManager:
             return
 
         if action.kind in ("limit", "market") and not action.reduce_only:
-            self._check_rate_limit()
+            # Сначала все проверки, и только потом расход лимита: отклонённый
+            # ордер не должен съедать квоту на реально отправленные.
+            self._check_rate_limit(record=False)
             add = (action.qty or Decimal(0)) * (action.price or mid)
             # для лимитки в ту же сторону складываем с текущей позицией
             same_side = position.side == action.side
@@ -111,8 +117,9 @@ class RiskManager:
                 )
             if account.available <= 0:
                 raise RiskReject("нулевой доступный баланс")
+            self._check_rate_limit(record=True)
 
-    def _check_rate_limit(self) -> None:
+    def _check_rate_limit(self, record: bool) -> None:
         now = time.time()
         self._order_times = [t for t in self._order_times if now - t < 3600]
         if len(self._order_times) >= self.max_orders_per_hour:
@@ -120,4 +127,24 @@ class RiskManager:
                 f"лимит {self.max_orders_per_hour} ордеров в час исчерпан "
                 "(защита от разгона комиссий)"
             )
-        self._order_times.append(now)
+        if record:
+            self._order_times.append(now)
+
+    # ------------------------------------------------- серия убыточных сделок
+    def register_trade(self, pnl: Decimal) -> None:
+        """Учёт закрытой сделки для предохранителя по серии убытков.
+
+        ВНИМАНИЕ: пока не подключён к торговому циклу — main.py не отслеживает
+        закрытые сделки и этот метод не вызывает. Предохранитель заработает
+        только после того, как в цикл добавят чтение closed-pnl.
+        """
+        if pnl < 0:
+            self._loss_streak += 1
+        else:
+            self._loss_streak = 0
+        if self.max_loss_streak and self._loss_streak >= self.max_loss_streak:
+            raise RiskHalt(
+                f"{self._loss_streak} убыточных сделок подряд при лимите "
+                f"{self.max_loss_streak}. Рынок не соответствует стратегии — "
+                "нужен разбор, а не следующая сделка."
+            )
