@@ -47,6 +47,7 @@ def main() -> int:
     ap.add_argument("--every", type=float, default=3.0, help="период опроса, секунды")
     ap.add_argument("--maker-bps", type=float, default=2.0)
     ap.add_argument("--notional", type=float, default=25.0)
+    ap.add_argument("--save", help="сохранить сырые замеры в CSV, чтобы анализ")
     args = ap.parse_args()
 
     from pybit.unified_trading import HTTP
@@ -78,9 +79,16 @@ def main() -> int:
     mids = [r["mid"] for r in rows]
     rt = 2 * args.maker_bps
 
-    # Движение середины между замерами — прокси неблагоприятного отбора.
-    moves = [abs(mids[i] - mids[i - 1]) / mids[i - 1] * 10_000 for i in range(1, len(mids))]
     half_spread = statistics.median(spreads) / 2
+
+    if args.save:
+        import csv as _csv
+        with open(args.save, "w", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh)
+            w.writerow(["t", "mid", "spread_bps", "depth_usdt"])
+            for r in rows:
+                w.writerow([r["t"], r["mid"], r["spread_bps"], r["depth_usdt"]])
+        print(f"  сырые замеры сохранены в {args.save}\n")
 
     q = statistics.quantiles(spreads, n=10)
     print("=" * 66)
@@ -96,10 +104,30 @@ def main() -> int:
     thin = sum(1 for d in depths if d < args.notional) / len(depths)
     print(f"  Время, когда на краю меньше вашего ордера ({args.notional:g}$): {thin:>5.1%}")
     print("  " + "-" * 62)
-    print(f"  Сдвиг середины между замерами, медиана {statistics.median(moves):>7.2f} bp")
-    print(f"  Половина спреда (ваш заработок с одной стороны) {half_spread:>7.2f} bp")
-    adverse = sum(1 for m in moves if m > half_spread) / len(moves)
-    print(f"  Доля замеров, где цена ушла дальше половины спреда: {adverse:>5.1%}")
+    print(f"  Ваш заработок с одной стороны (половина спреда): {half_spread:>6.2f} bp")
+    print()
+    print("  СНОС ЦЕНЫ ПО ГОРИЗОНТАМ УДЕРЖАНИЯ")
+    print("  Инвентарь держится не секунды, а минуты. Смотрим, насколько")
+    print("  типично уходит цена за это время против вашей половины спреда.")
+    print(f"  {'горизонт':>10} {'медиана':>9} {'90-й проц':>11} {'хуже вашего края':>18}")
+
+    # Сколько замеров укладывается в горизонт при текущем периоде опроса
+    adverse_by_h: dict[int, float] = {}
+    for horizon_s in (args.every, 30, 60, 300):
+        lag = max(1, int(round(horizon_s / args.every)))
+        if lag >= len(mids):
+            continue
+        moves = [abs(mids[i + lag] - mids[i]) / mids[i] * 10_000
+                 for i in range(len(mids) - lag)]
+        if not moves:
+            continue
+        worse = sum(1 for m in moves if m > half_spread) / len(moves)
+        adverse_by_h[int(horizon_s)] = worse
+        p90 = statistics.quantiles(moves, n=10)[-1] if len(moves) > 10 else max(moves)
+        print(f"  {horizon_s:>8.0f} с {statistics.median(moves):>8.2f}b "
+              f"{p90:>10.2f}b {worse:>17.0%}")
+    # Для вывода берём горизонт в минуту: типичное время удержания инвентаря
+    adverse = adverse_by_h.get(60, max(adverse_by_h.values()) if adverse_by_h else 0.0)
     print("=" * 66)
 
     print("\n  ВЫВОД")
@@ -113,9 +141,9 @@ def main() -> int:
         print("    Вы будете двигать цену собственной заявкой и стоять в очереди.")
         ok = False
     if adverse > 0.5:
-        print(f"  ! Цена уходит дальше половины спреда в {adverse:.0%} замеров.")
-        print("    Это и есть неблагоприятный отбор: заработок со спреда")
-        print("    съедается движением против вас. Маркет-мейкинг здесь опасен.")
+        print(f"  ! За минуту удержания цена уходит дальше вашего края в {adverse:.0%} случаев.")
+        print("    Это неблагоприятный отбор: бид исполняется на падении, аск на росте,")
+        print("    и движение против вас съедает заработок со спреда.")
         ok = False
     if ok:
         print("  Спред устойчив, глубина достаточна, движение умереннее половины спреда.")
