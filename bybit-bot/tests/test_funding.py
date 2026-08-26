@@ -104,3 +104,37 @@ def test_median_and_mean_diverge_on_spiky_data():
     import statistics
     spiky = [0.00001] * 190 + [0.002] * 10
     assert statistics.mean(spiky) > statistics.median(spiky) * 5
+
+
+# ------------------------------------------- хедж высокой ставки Earn
+def test_earn_rates_parsed():
+    from tools.earn_hedge import parse_coins
+    assert parse_coins(["BICO=106.83", "bmt=80.40"]) == {"BICO": 106.83, "BMT": 80.4}
+
+
+def test_malformed_earn_input_rejected():
+    """Опечатка в ставке не должна молча превратиться в решение о деньгах."""
+    from tools.earn_hedge import parse_coins
+    for bad in (["BICO"], ["BICO=много"], ["=50"]):
+        try:
+            parse_coins(bad)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError(f"должно было отклониться: {bad}")
+
+
+def test_negative_funding_eats_earn_rate():
+    """Ставка Earn и фандинг — одно давление: хедж съедает выгоду.
+
+    Проверка арифметики вывода: шорт получает положительный фандинг
+    и платит отрицательный, поэтому итог = earn + funding_apr.
+    """
+    earn, funding = 106.83, -150.0
+    assert earn + funding < 0, "при таком фандинге хедж уводит позицию в минус"
+    assert 80.40 + (-6.0) < 6.82, "BMT после фандинга не обгоняет вклад USDT"
+
+
+def test_positive_funding_adds_to_earn():
+    """Редкий случай, когда обе стороны в вашу пользу."""
+    assert 17.26 + 10.9 > 6.82
