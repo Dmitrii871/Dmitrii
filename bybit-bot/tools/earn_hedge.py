@@ -29,15 +29,25 @@ def parse_coins(items: list[str]) -> dict[str, float]:
         if "=" not in it:
             raise SystemExit(f"Формат: МОНЕТА=СТАВКА, например BICO=106.83 (получено '{it}')")
         coin, rate = it.split("=", 1)
+        coin = coin.strip().upper()
+        if not coin:
+            raise SystemExit(f"Пустое имя монеты в '{it}'")
         try:
-            out[coin.strip().upper()] = float(rate)
+            out[coin] = float(rate)
         except ValueError:
             raise SystemExit(f"Не число: '{rate}'")
     return out
 
 
-def funding_apr(http, symbol: str, periods: int) -> tuple[float, float, int] | None:
-    """Возвращает (медианные годовые, доля положительных, число выплат)."""
+def funding_apr(http, symbol: str, periods: int) -> tuple[float, float, float, int] | None:
+    """Возвращает (фактические годовые, медианные годовые, доля положительных, выплат).
+
+    Решение принимается по ФАКТИЧЕСКИ накопленному, а не по медиане.
+    У фандинга бывают редкие огромные всплески: медиана их не видит,
+    а списывается каждая выплата. На BMTUSDT медиана давала -6% годовых
+    при фактических -104% — расхождение в 17 раз, и по медиане позиция
+    выглядела бы прибыльной, будучи убыточной.
+    """
     inst = http.get_instruments_info(category="linear", symbol=symbol)["result"]["list"]
     if not inst:
         return None
@@ -49,7 +59,9 @@ def funding_apr(http, symbol: str, periods: int) -> tuple[float, float, int] | N
         return None
     per_year = 8760 / interval_h
     positive = sum(1 for r in rates if r > 0) / len(rates)
-    return statistics.median(rates) * per_year * 100, positive, len(rates)
+    realized = statistics.mean(rates) * per_year * 100     # то, что реально начислится
+    median = statistics.median(rates) * per_year * 100     # для сравнения: ровный ли поток
+    return realized, median, positive, len(rates)
 
 
 def main() -> int:
@@ -68,8 +80,8 @@ def main() -> int:
     print(f"\nКапитал {args.capital:.0f}$. Шорт в бессрочном полностью гасит ценовой риск,")
     print("поэтому остаётся ставка Earn МИНУС фандинг, который платит шорт.\n")
     print("=" * 78)
-    print(f"  {'монета':<8} {'Earn':>9} {'фандинг':>10} {'полож.':>7} {'выплат':>7} "
-          f"{'ИТОГО':>9} {'$/год':>9}")
+    print(f"  {'монета':<7} {'Earn':>8} {'фандинг факт':>13} {'медиана':>9} {'полож.':>7} "
+          f"{'ИТОГО':>8} {'$/год':>8}")
     print("  " + "-" * 74)
 
     rows = []
@@ -83,22 +95,29 @@ def main() -> int:
         if res is None:
             print(f"  {coin:<8} {earn:>8.2f}%  нет данных по фандингу — хедж невозможен")
             continue
-        f_apr, positive, n = res
+        f_apr, f_med, positive, n = res
         # Шорт получает положительный фандинг и платит отрицательный
         net = earn + f_apr
-        rows.append((coin, earn, f_apr, positive, n, net))
-        print(f"  {coin:<8} {earn:>8.2f}% {f_apr:>9.1f}% {positive:>6.0%} {n:>7} "
-              f"{net:>8.1f}% {net/100*args.capital:>8.2f}$")
+        skew = "  !" if f_med != 0 and abs(f_apr / f_med) > 3 else ""
+        rows.append((coin, earn, f_apr, f_med, positive, n, net))
+        print(f"  {coin:<7} {earn:>7.2f}% {f_apr:>12.1f}% {f_med:>8.1f}% {positive:>6.0%} "
+              f"{net:>7.1f}% {net/100*args.capital:>7.2f}${skew}")
 
     print("=" * 78)
     if not rows:
         return 1
 
-    good = [r for r in rows if r[5] > 6.82]      # порог: лучшая ставка USDT в Earn
+    skewed = [r for r in rows if r[3] != 0 and abs(r[2] / r[3]) > 3]
+    if skewed:
+        print(f"\n  ! У {len(skewed)} монет факт расходится с медианой более чем втрое —")
+        print("    это редкие огромные выплаты. Решение принимайте по столбцу ФАКТ:")
+        print("    медиана таких всплесков не видит, а списывается каждая выплата.")
+
+    good = [r for r in rows if r[6] > 6.82]      # порог: лучшая ставка USDT в Earn
     print("\n  ВЫВОД")
     if good:
         print(f"  {len(good)} монет обгоняют простой вклад USDT (6.82%) даже после фандинга:")
-        for coin, earn, f_apr, positive, n, net in good:
+        for coin, earn, f_apr, f_med, positive, n, net in good:
             print(f"    {coin}: {net:.1f}% годовых — но проверьте ликвидность обеих ног,")
             print(f"      риск делистинга и то, что ставка Earn гибкая и меняется в любой момент.")
     else:

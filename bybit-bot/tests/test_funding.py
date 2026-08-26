@@ -124,15 +124,19 @@ def test_malformed_earn_input_rejected():
             raise AssertionError(f"должно было отклониться: {bad}")
 
 
-def test_negative_funding_eats_earn_rate():
-    """Ставка Earn и фандинг — одно давление: хедж съедает выгоду.
+def test_hedge_must_use_realized_not_median_funding():
+    """Медиана прячет редкие огромные выплаты — решать по ней нельзя.
 
-    Проверка арифметики вывода: шорт получает положительный фандинг
-    и платит отрицательный, поэтому итог = earn + funding_apr.
+    BMTUSDT: медиана -6% годовых, а фактически накопилось -23.54$ на ноге
+    250$ за 33 дня, то есть около -104% годовых. По медиане хедж выглядел
+    бы прибыльным (+74%), по факту это убыток.
     """
-    earn, funding = 106.83, -150.0
-    assert earn + funding < 0, "при таком фандинге хедж уводит позицию в минус"
-    assert 80.40 + (-6.0) < 6.82, "BMT после фандинга не обгоняет вклад USDT"
+    earn = 80.40
+    median_apr = -6.0
+    realized_apr = -23.54 / 250 * (365 / 33) * 100
+    assert abs(realized_apr / median_apr) > 10, "расхождение должно быть в разы"
+    assert earn + median_apr > 6.82, "по медиане выглядит выгодным — это и есть ловушка"
+    assert earn + realized_apr < 0, "по факту позиция убыточна"
 
 
 def test_positive_funding_adds_to_earn():
