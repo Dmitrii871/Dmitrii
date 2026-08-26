@@ -81,7 +81,7 @@ def run(cfg: dict, dry_run: bool) -> int:
                 position=ex.position(),
                 account=account,
                 instrument=inst,
-                open_orders=ex.open_orders() if name == "maker" else [],
+                open_orders=ex.open_orders(),
                 maker_bps=float(cfg.get("fees", {}).get("maker_bps", 2.0)),
                 taker_bps=float(cfg.get("fees", {}).get("taker_bps", 5.5)),
             )

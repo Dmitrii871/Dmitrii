@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from decimal import Decimal
 
 from ..indicators import bollinger_pct_b, macd, rsi
@@ -35,21 +36,38 @@ class SignalStrategy(Strategy):
         self.tp_pct = Decimal(str(cfg.get("take_profit_pct", 1.2))) / 100
         self.sl_pct = Decimal(str(cfg.get("stop_loss_pct", 0.8))) / 100
         self.cooldown_bars = int(cfg.get("cooldown_bars", 2))
+        # market  -> вход рыночным ордером, комиссия тейкера
+        # post_only -> вход лимиткой у ближней цены, комиссия мейкера
+        self.entry_type = str(cfg.get("entry_type", "market")).lower()
+        self.entry_ttl_seconds = int(cfg.get("entry_ttl_seconds", 90))
         self._last_entry_bar = 0
         self._bars_seen = 0
         self._prev_bar_time = 0
+        self._pending_since: float | None = None
 
     def warmup_bars(self) -> int:
         return max(self.macd_params[1] + self.macd_params[2], self.bb_period, self.rsi_period) + 30
 
     def validate(self, fees: dict) -> None:
-        round_trip_bps = 2 * float(fees.get("taker_bps", 5.5))
+        if self.entry_type not in ("market", "post_only"):
+            raise ValueError("entry_type должен быть 'market' или 'post_only'")
+        taker = float(fees.get("taker_bps", 5.5))
+        maker = float(fees.get("maker_bps", 2.0))
+        # вход мейкером + выход по TP/SL тейкером; при market обе стороны тейкер
+        entry_fee = maker if self.entry_type == "post_only" else taker
+        round_trip_bps = entry_fee + taker
         tp_bps = float(self.tp_pct) * 10_000
         if tp_bps <= round_trip_bps:
             raise ValueError(
                 f"take_profit_pct={float(self.tp_pct)*100:.2f}% даёт {tp_bps:.1f} bp, "
-                f"а round-trip тейкером стоит {round_trip_bps:.1f} bp. "
-                "Прибыльные сделки будут съедены комиссией — увеличьте тейк-профит."
+                f"а круг при входе '{self.entry_type}' стоит {round_trip_bps:.1f} bp. "
+                f"Поставьте тейк-профит минимум {round_trip_bps*3/100:.3f}%."
+            )
+        if tp_bps < round_trip_bps * 3:
+            log.warning(
+                "Тейк-профит %.3f%% всего в %.1f раза больше комиссии (%.1f bp). "
+                "Запас на проскальзывание почти отсутствует.",
+                float(self.tp_pct) * 100, tp_bps / round_trip_bps, round_trip_bps,
             )
         if self.sl_pct <= 0 or self.tp_pct <= 0:
             raise ValueError("take_profit_pct и stop_loss_pct должны быть > 0")
@@ -93,6 +111,18 @@ class SignalStrategy(Strategy):
         if len(closes) < self.warmup_bars():
             return []
 
+        # Незалившаяся лимитка на вход устаревает: сигнал был на своей цене,
+        # держать её вечно — значит войти уже в другом рынке.
+        if self.entry_type == "post_only" and ctx.position.is_flat and ctx.open_orders:
+            if self._pending_since is None:
+                self._pending_since = time.time()
+            elif time.time() - self._pending_since > self.entry_ttl_seconds:
+                self._pending_since = None
+                return [Action(kind="cancel_all",
+                               reason=f"лимитка на вход не залилась за {self.entry_ttl_seconds}с")]
+        else:
+            self._pending_since = None
+
         # считаем сигналы только один раз на закрытии свечи
         if ctx.md.bar_time != self._prev_bar_time:
             self._prev_bar_time = ctx.md.bar_time
@@ -123,14 +153,24 @@ class SignalStrategy(Strategy):
 
     def _entry(self, side: str, ctx: Context, votes: int, snap: dict) -> Action:
         self._last_entry_bar = self._bars_seen
-        price = ctx.md.last
+        if self.entry_type == "post_only":
+            # встаём в очередь на ближней стороне книги — комиссия мейкера,
+            # цена которой является риск неисполнения
+            price = ctx.md.bid if side == "Buy" else ctx.md.ask
+            kind, post_only = "limit", True
+        else:
+            price = ctx.md.last
+            kind, post_only = "market", False
+
         qty = self.qty_for_notional(self.notional, price, ctx.instrument)
         if side == "Buy":
             tp, sl = price * (1 + self.tp_pct), price * (1 - self.sl_pct)
         else:
             tp, sl = price * (1 - self.tp_pct), price * (1 + self.sl_pct)
         return Action(
-            kind="market", side=side, qty=qty,
+            kind=kind, side=side, qty=qty,
+            price=price if kind == "limit" else None,
+            post_only=post_only,
             take_profit=tp, stop_loss=sl,
-            reason=f"{votes} индикатора за {side}: {snap}",
+            reason=f"{votes} индикатора за {side} ({self.entry_type}): {snap}",
         )

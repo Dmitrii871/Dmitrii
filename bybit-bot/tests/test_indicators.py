@@ -66,11 +66,58 @@ def test_short_series_returns_empty():
 def test_strategy_rejects_take_profit_below_fees():
     strat = SignalStrategy({"take_profit_pct": 0.05, "stop_loss_pct": 0.5})
     try:
-        strat.validate({"taker_bps": 5.5})
+        strat.validate({"taker_bps": 5.5, "maker_bps": 2.0})
     except ValueError as exc:
-        assert "комисси" in str(exc)
+        assert "круг при входе" in str(exc)
     else:
         raise AssertionError("должна была быть ошибка: тейк меньше комиссии")
+
+
+def test_post_only_entry_has_lower_fee_threshold():
+    """Вход мейкером удешевляет круг, значит допускает меньший тейк-профит."""
+    fees = {"taker_bps": 5.5, "maker_bps": 2.0}
+    # 0.10% = 10 bp: круг тейкером 11 bp -> отказ, круг мейкером 7.5 bp -> проходит
+    taker = SignalStrategy({"take_profit_pct": 0.10, "stop_loss_pct": 0.1, "entry_type": "market"})
+    try:
+        taker.validate(fees)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("market-вход при TP 0.10% должен быть отклонён")
+
+    SignalStrategy({"take_profit_pct": 0.10, "stop_loss_pct": 0.1,
+                    "entry_type": "post_only"}).validate(fees)
+
+
+def test_unknown_entry_type_rejected():
+    try:
+        SignalStrategy({"entry_type": "magic"}).validate({"taker_bps": 5.5})
+    except ValueError as exc:
+        assert "entry_type" in str(exc)
+    else:
+        raise AssertionError("неизвестный entry_type должен отклоняться")
+
+
+def test_post_only_entry_quotes_at_near_touch():
+    """PostOnly-вход в лонг встаёт на биде, а не бьёт по аску."""
+    from decimal import Decimal
+    from bot.models import Account, Instrument, MarketData, Position
+    from bot.strategies.base import Context
+
+    strat = SignalStrategy({"entry_type": "post_only", "order_notional_usdt": 25})
+    ctx = Context(
+        md=MarketData("ETHUSDT", Decimal("2463.28"), Decimal("2463.30"), Decimal("2463.29")),
+        position=Position("ETHUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(40), Decimal(23)),
+        instrument=Instrument("ETHUSDT", Decimal("0.01"), Decimal("0.01"),
+                              Decimal("0.01"), Decimal(5)),
+    )
+    action = strat._entry("Buy", ctx, 2, {})
+    assert action.kind == "limit" and action.post_only
+    assert action.price == ctx.md.bid, "лонг должен вставать на биде"
+
+    action_sell = strat._entry("Sell", ctx, 2, {})
+    assert action_sell.price == ctx.md.ask, "шорт должен вставать на аске"
 
 
 def test_strategy_accepts_sane_take_profit():
