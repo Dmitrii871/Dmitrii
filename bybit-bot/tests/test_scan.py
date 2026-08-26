@@ -13,8 +13,9 @@ def ticker(sym, bid, ask, last, turnover=50e6, funding=0.0001):
             "fundingRate": str(funding)}
 
 
-def inst(sym, min_qty):
-    return {"symbol": sym, "lotSizeFilter": {"minOrderQty": str(min_qty)}}
+def inst(sym, min_qty, interval=480):
+    return {"symbol": sym, "lotSizeFilter": {"minOrderQty": str(min_qty)},
+            "fundingInterval": interval}
 
 
 CAPITAL, LEV = 40.0, 3          # бюджет = 40 * 3 * 0.6 = 72 USDT
@@ -59,11 +60,39 @@ def test_affordable_instrument_passes():
     assert len(rows) == 1
 
 
-def test_funding_annualised_correctly():
-    """Фандинг платится трижды в сутки: 0.01% -> 10.95% годовых."""
-    rows = analyse([ticker("ETHUSDT", 2463.28, 2463.30, 2463.29, funding=0.0001)],
-                   {"ETHUSDT": inst("ETHUSDT", 0.01)}, CAPITAL, LEV, 2.0, 5.5)
+def test_funding_annualised_by_contract_interval():
+    """Годовые обязаны считаться по интервалу КОНТРАКТА, а не по общему 8ч.
+
+    У Bybit интервал разный: 480, 240, 60 минут. Ошибка здесь даёт
+    расхождение в разы и может подтолкнуть к сделке на ложных цифрах.
+    """
+    t = ticker("XUSDT", 10.0, 10.01, 10.0, funding=0.0001)
+    apr_8h = analyse([t], {"XUSDT": inst("XUSDT", 1, interval=480)},
+                     CAPITAL, LEV, 2.0, 5.5)[0]["funding_apr"]
+    apr_1h = analyse([t], {"XUSDT": inst("XUSDT", 1, interval=60)},
+                     CAPITAL, LEV, 2.0, 5.5)[0]["funding_apr"]
+    assert abs(apr_8h - 10.95) < 0.01, "8ч: 0.01% x 1095 выплат = 10.95%"
+    assert abs(apr_1h - 87.6) < 0.1, "1ч: тот же процент, но 8760 выплат"
+    assert abs(apr_1h / apr_8h - 8) < 0.01, "разница ровно в 8 раз"
+
+
+def test_missing_funding_interval_defaults_to_8h():
+    """Если биржа не отдала интервал — берём 8 часов, но не падаем."""
+    rows = analyse([ticker("XUSDT", 10.0, 10.01, 10.0, funding=0.0001)],
+                   {"XUSDT": {"symbol": "XUSDT",
+                              "lotSizeFilter": {"minOrderQty": "1"}}},
+                   CAPITAL, LEV, 2.0, 5.5)
     assert abs(rows[0]["funding_apr"] - 10.95) < 0.01
+
+
+def test_monthly_income_is_grounded_in_capital():
+    """Столбец $/мес должен считаться от бюджета, а не быть абстрактным процентом."""
+    rows = analyse([ticker("XUSDT", 10.0, 10.01, 10.0, funding=0.0001)],
+                   {"XUSDT": inst("XUSDT", 1, interval=480)}, CAPITAL, LEV, 2.0, 5.5)
+    budget = CAPITAL * LEV * 0.6          # 72 USDT
+    expected = budget * 0.0001 * (1095 / 12)
+    assert abs(rows[0]["month_usdt"] - expected) < 0.01
+    assert rows[0]["month_usdt"] < 1.0, "на таком депозите это меньше доллара в месяц"
 
 
 def test_negative_funding_means_shorts_pay():
