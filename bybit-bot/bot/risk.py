@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,14 +23,52 @@ class RiskManager:
         self.min_free_margin = float(cfg.get("min_free_margin_ratio", 0.25))
         self.max_orders_per_hour = int(cfg.get("max_orders_per_hour", 120))
         self.kill_file = Path(cfg.get("kill_switch_file", "./STOP"))
-        self._session_equity: Decimal | None = None
+        self._day_equity: Decimal | None = None
+        self._day: str = ""
         self._order_times: list[float] = []
 
-    def start_session(self, account: Account) -> None:
-        self._session_equity = account.equity
+    @staticmethod
+    def _today() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def start_day(self, account: Account) -> None:
+        """Отсчёт дневного убытка начинается заново в 00:00 UTC.
+
+        Иначе лимит превращается в лимит "за всё время работы" и бот
+        останавливается через неделю на накопленной сумме, а не на дневной.
+        """
+        self._day = self._today()
+        self._day_equity = account.equity
         log.info(
-            "Стартовый капитал сессии: %.4f USDT | стоп по убытку: -%.2f USDT",
-            float(account.equity), float(self.max_daily_loss),
+            "Торговый день %s | капитал на начало: %.4f USDT | дневной стоп: -%.2f USDT",
+            self._day, float(account.equity), float(self.max_daily_loss),
+        )
+
+    def preflight(self, account: Account, max_leverage: int) -> None:
+        """Проверка согласованности лимитов с реальным балансом — до первой сделки.
+
+        Частая ошибка: max_position_usdt задан больше, чем позволяет депозит,
+        и бот открывает позицию, после чего немедленно падает по марже.
+        """
+        if account.equity <= 0:
+            raise RiskHalt("нулевой капитал на счёте")
+        need = self.max_position / max(Decimal(max_leverage), Decimal(1))
+        after = account.available - need
+        ratio = float(after / account.equity)
+        if ratio < self.min_free_margin:
+            safe = (account.available - account.equity * Decimal(str(self.min_free_margin))) \
+                * Decimal(max_leverage)
+            raise RiskHalt(
+                f"max_position_usdt={float(self.max_position):.0f} при плече {max_leverage}x "
+                f"требует {float(need):.2f} USDT маржи. После открытия свободной маржи "
+                f"осталось бы {ratio:.1%} при пороге {self.min_free_margin:.0%} — "
+                f"бот остановился бы сразу после входа. "
+                f"Поставьте max_position_usdt не больше {max(float(safe), 0):.0f}."
+            )
+        log.info(
+            "Проверка лимитов пройдена: позиция до %.0f USDT требует %.2f USDT маржи, "
+            "свободной маржи останется %.1f%%",
+            float(self.max_position), float(need), ratio * 100,
         )
 
     # ------------------------------------------------------- проверки цикла
@@ -38,15 +77,15 @@ class RiskManager:
         if self.kill_file.exists():
             raise RiskHalt(f"обнаружен файл-стоп {self.kill_file}")
 
-        if self._session_equity is None:
-            self.start_session(account)
+        if self._day_equity is None or self._day != self._today():
+            self.start_day(account)
             return
 
-        drawdown = self._session_equity - account.equity
+        drawdown = self._day_equity - account.equity
         if drawdown >= self.max_daily_loss:
             raise RiskHalt(
-                f"достигнут дневной лимит убытка: -{float(drawdown):.4f} USDT "
-                f"(лимит {float(self.max_daily_loss)})"
+                f"достигнут дневной лимит убытка за {self._day}: "
+                f"-{float(drawdown):.4f} USDT (лимит {float(self.max_daily_loss)})"
             )
         if account.free_margin_ratio < self.min_free_margin:
             raise RiskHalt(

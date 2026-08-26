@@ -63,8 +63,10 @@ def run(cfg: dict, dry_run: bool) -> int:
     risk = RiskManager(cfg["risk"])
     inst = ex.instrument()
     ex.check_position_mode()
+    leverage = int(cfg.get("leverage", 3))
+    risk.preflight(ex.account(), leverage)
     if not dry_run:
-        ex.set_leverage(int(cfg.get("leverage", 3)))
+        ex.set_leverage(leverage)
 
     interval = strat_cfg.get(name, {}).get("interval", "30")
     warmup = max(strategy.warmup_bars(), 60)
