@@ -28,11 +28,12 @@ SL_GRID = (0.5, 0.7, 0.9, 1.2, 1.5)
 CONFLUENCE_GRID = (2, 3)
 
 
-def run(rows, tp: float, sl: float, conf: int, fee: float, notional: float) -> dict:
+def run(rows, tp: float, sl: float, conf: int, mode: str,
+        fee: float, notional: float) -> dict:
     return backtest(
         rows,
-        {"take_profit_pct": tp, "stop_loss_pct": sl,
-         "min_confluence": conf, "order_notional_usdt": notional},
+        {"take_profit_pct": tp, "stop_loss_pct": sl, "min_confluence": conf,
+         "order_notional_usdt": notional, "mode": mode},
         fee, notional,
     )
 
@@ -43,6 +44,9 @@ def main() -> int:
     ap.add_argument("--interval", default="60")
     ap.add_argument("--bars", type=int, default=10_000)
     ap.add_argument("--csv")
+    ap.add_argument("--mode", choices=["reversion", "momentum", "both"],
+                    default="reversion",
+                    help="reversion — покупать перепроданность; momentum — покупать силу")
     ap.add_argument("--notional", type=float, default=25.0)
     ap.add_argument("--fee-bps", type=float, default=3.75,
                     help="комиссия за сторону: 3.75 = вход мейкером, выход тейкером")
@@ -64,12 +68,13 @@ def main() -> int:
             if tp <= sl:
                 continue                      # тейк не больше стопа — бессмысленно
             for conf in CONFLUENCE_GRID:
-                tr = run(train, tp, sl, conf, args.fee_bps, args.notional)
+              for mode in (("reversion", "momentum") if args.mode == "both" else (args.mode,)):
+                tr = run(train, tp, sl, conf, mode, args.fee_bps, args.notional)
                 if tr["trades"] < args.min_trades:
                     continue
-                te = run(test, tp, sl, conf, args.fee_bps, args.notional)
+                te = run(test, tp, sl, conf, mode, args.fee_bps, args.notional)
                 results.append({
-                    "tp": tp, "sl": sl, "conf": conf,
+                    "tp": tp, "sl": sl, "conf": conf, "mode": mode,
                     "train_pf": tr["profit_factor"], "train_net": tr["net_usdt"],
                     "train_trades": tr["trades"],
                     "test_pf": te["profit_factor"], "test_net": te["net_usdt"],
@@ -85,12 +90,12 @@ def main() -> int:
     print("\n" + "=" * 78)
     print("  ЛУЧШИЕ 10 ПО ОБУЧЕНИЮ — и что они дали на непросмотренных данных")
     print("=" * 78)
-    print(f"  {'TP%':>5} {'SL%':>5} {'соглс':>6} | {'ОБУЧ pf':>8} {'итог$':>8} {'сдел':>5} "
+    print(f"  {'режим':>9} {'TP%':>5} {'SL%':>5} {'сгл':>4} | {'ОБУЧ pf':>8} {'итог$':>8} {'сдел':>5} "
           f"| {'ПРОВ pf':>8} {'итог$':>8} {'сдел':>5}")
-    print("  " + "-" * 74)
+    print("  " + "-" * 76)
     for d in results[:10]:
-        holds = "" if d["test_net"] > 0 else "  <- на проверке убыток"
-        print(f"  {d['tp']:>5.1f} {d['sl']:>5.1f} {d['conf']:>6} "
+        holds = "" if d["test_net"] > 0 else "  <- убыток"
+        print(f"  {d['mode']:>9} {d['tp']:>5.1f} {d['sl']:>5.1f} {d['conf']:>4} "
               f"| {d['train_pf']:>8.2f} {d['train_net']:>8.2f} {d['train_trades']:>5} "
               f"| {d['test_pf']:>8.2f} {d['test_net']:>8.2f} {d['test_trades']:>5}{holds}")
 
@@ -123,6 +128,7 @@ def main() -> int:
     print(f"\n  ВЫВОД: {len(survivors)} настроек подтвердились вне выборки, "
           f"медиана профит-фактора {med_test_pf:.2f}")
     print(f"\n  Рекомендуемая настройка для config.yaml:")
+    print(f"      mode: {best['mode']}")
     print(f"      take_profit_pct: {best['tp']}")
     print(f"      stop_loss_pct: {best['sl']}")
     print(f"      min_confluence: {best['conf']}")

@@ -262,3 +262,38 @@ def test_votes_series_matches_per_bar():
     for i in range(strat.warmup_bars(), len(closes)):
         per_bar = strat.votes(closes[: i + 1])[:2]
         assert batch[i] == per_bar, f"расхождение на баре {i}: {batch[i]} != {per_bar}"
+
+
+def test_momentum_mode_is_exact_inverse_of_reversion():
+    """Трендовый режим обязан быть точным зеркалом разворотного."""
+    rev = SignalStrategy({"mode": "reversion"})
+    mom = SignalStrategy({"mode": "momentum"})
+    for series in (UP, DOWN):
+        rl, rs, _ = rev.votes(series)
+        ml, ms, _ = mom.votes(series)
+        assert (ml, ms) == (rs, rl), "режимы должны быть зеркальны"
+
+
+def test_momentum_mode_batch_matches_per_bar():
+    """Ускоренный расчёт должен зеркалиться так же, иначе бэктест соврёт."""
+    import math
+    closes = [100 + 9 * math.sin(i / 6) for i in range(300)]
+    strat = SignalStrategy({"mode": "momentum"})
+    batch = strat.votes_series(closes)
+    for i in range(strat.warmup_bars(), len(closes)):
+        assert batch[i] == strat.votes(closes[: i + 1])[:2], f"расхождение на баре {i}"
+
+
+def test_bad_mode_rejected():
+    try:
+        SignalStrategy({"mode": "гадание"}).validate({"taker_bps": 5.5})
+    except ValueError as exc:
+        assert "mode" in str(exc)
+    else:
+        raise AssertionError("неизвестный режим должен отклоняться")
+
+
+def test_momentum_buys_strength():
+    """В трендовом режиме растущий рынок даёт сигнал в лонг, а не в шорт."""
+    actions = SignalStrategy({"mode": "momentum", "min_confluence": 2}).decide(_ctx(UP))
+    assert [a.side for a in actions] == ["Buy"]

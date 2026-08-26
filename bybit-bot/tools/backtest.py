@@ -171,6 +171,9 @@ def main() -> int:
     ap.add_argument("--symbol", default="ETHUSDT")
     ap.add_argument("--interval", default="30")
     ap.add_argument("--bars", type=int, default=1000)
+    ap.add_argument("--mode", choices=["reversion", "momentum", "both"],
+                    default="reversion",
+                    help="reversion — покупать перепроданность; momentum — покупать силу")
     ap.add_argument("--notional", type=float, default=25.0, help="размер сделки, USDT")
     ap.add_argument("--fee-bps", type=float, default=5.5, help="комиссия за одну сторону, bp")
     ap.add_argument("--tp", type=float, default=1.2, help="take profit, %%")
@@ -188,6 +191,7 @@ def main() -> int:
         "stop_loss_pct": args.sl,
         "min_confluence": args.confluence,
         "order_notional_usdt": args.notional,
+        "mode": args.mode if args.mode != "both" else "reversion",
     }
     if args.demo:
         rows = synthetic_klines(args.bars, seed=args.seed)

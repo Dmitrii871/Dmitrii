@@ -47,6 +47,11 @@ class SignalStrategy(Strategy):
         # Односторонний режим осмыслен на выраженном тренде или когда
         # фандинг устойчиво платит в одну сторону.
         self.direction = str(cfg.get("direction", "both")).lower()
+        # reversion — покупаем перепроданность (ловим разворот);
+        # momentum  — покупаем силу (идём за трендом).
+        # Что из этого работает, решает оптимизатор на ваших данных,
+        # а не убеждения автора кода.
+        self.mode = str(cfg.get("mode", "reversion")).lower()
         self.entry_ttl_seconds = int(cfg.get("entry_ttl_seconds", 90))
         self._last_entry_bar = -10**9   # кулдаун не должен блокировать первый вход
         self._bars_seen = 0
@@ -61,6 +66,8 @@ class SignalStrategy(Strategy):
             raise ValueError("entry_type должен быть 'market' или 'post_only'")
         if self.direction not in ("both", "long_only", "short_only"):
             raise ValueError("direction должен быть 'both', 'long_only' или 'short_only'")
+        if self.mode not in ("reversion", "momentum"):
+            raise ValueError("mode должен быть 'reversion' или 'momentum'")
         taker = float(fees.get("taker_bps", 5.5))
         maker = float(fees.get("maker_bps", 2.0))
         # вход мейкером + выход по TP/SL тейкером; при market обе стороны тейкер
@@ -113,6 +120,8 @@ class SignalStrategy(Strategy):
             elif b[-1] >= self.bb_sell:
                 shorts += 1
 
+        if self.mode == "momentum":
+            longs, shorts = shorts, longs
         return longs, shorts, snapshot
 
     def votes_series(self, closes: list[float]) -> list[tuple[int, int]]:
@@ -153,7 +162,7 @@ class SignalStrategy(Strategy):
                     longs += 1
                 elif b[m] >= self.bb_sell:
                     shorts += 1
-            out[i] = (longs, shorts)
+            out[i] = (shorts, longs) if self.mode == "momentum" else (longs, shorts)
         return out
 
     # ------------------------------------------------------------------ решение
