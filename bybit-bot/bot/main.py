@@ -69,6 +69,9 @@ def run(cfg: dict, dry_run: bool) -> int:
     interval = strat_cfg.get(name, {}).get("interval", "30")
     warmup = max(strategy.warmup_bars(), 60)
     poll = int(cfg.get("poll_seconds", 10))
+    heartbeat_every = max(1, int(cfg.get("heartbeat_seconds", 300)) // max(poll, 1))
+    tick = 0
+    start_equity: float | None = None
     log.info("Стратегия '%s' запущена. Ctrl+C или файл %s для остановки.",
              name, cfg["risk"].get("kill_switch_file", "./STOP"))
 
@@ -86,6 +89,26 @@ def run(cfg: dict, dry_run: bool) -> int:
                 maker_bps=float(cfg.get("fees", {}).get("maker_bps", 2.0)),
                 taker_bps=float(cfg.get("fees", {}).get("taker_bps", 5.5)),
             )
+
+            tick += 1
+            if start_equity is None:
+                start_equity = float(account.equity)
+
+            # Пульс: раз в heartbeat_seconds показываем, что бот жив и чем занят.
+            if tick % heartbeat_every == 1:
+                pos = ctx.position
+                pos_txt = (
+                    f"{pos.side} {pos.size} @ {pos.entry_price} "
+                    f"(P&L {float(pos.unrealised_pnl):+.4f})"
+                    if not pos.is_flat else "нет позиции"
+                )
+                delta = float(account.equity) - start_equity
+                log.info(
+                    "СТАТУС | цена %s | %s | капитал %.4f USDT (%+.4f за сессию) | "
+                    "ордеров %d | спред %.1f bp",
+                    ctx.md.last, pos_txt, float(account.equity), delta,
+                    len(ctx.open_orders), ctx.md.spread_bps,
+                )
 
             for action in strategy.decide(ctx):
                 try:

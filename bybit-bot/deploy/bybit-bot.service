@@ -1,0 +1,33 @@
+# Автозапуск бота на VPS (systemd).
+#
+#   sudo cp deploy/bybit-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bybit-bot
+#
+# Смотреть работу в реальном времени:  journalctl -u bybit-bot -f
+# Остановить:                          sudo systemctl stop bybit-bot
+
+[Unit]
+Description=Bybit trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/home/trader/bybit-bot
+ExecStart=/home/trader/bybit-bot/.venv/bin/python -m bot.main --config config.yaml
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Ограничения: боту не нужен доступ никуда, кроме своей папки
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/trader/bybit-bot
+
+[Install]
+WantedBy=multi-user.target

@@ -8,6 +8,7 @@ testnet: true             # false -> реальные деньги. Требуе
 dry_run: true             # true -> ордера только логируются, не отправляются
 leverage: 3
 poll_seconds: 10
+heartbeat_seconds: 300   # как часто печатать строку СТАТУС
 log_level: INFO
 
 # Комиссии вашего VIP-уровня, в базисных пунктах (1 bp = 0.01%)
