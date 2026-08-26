@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from ..indicators import bollinger_pct_b, macd, rsi
 from ..models import Action
+from ..plan import TradingPlan
 from .base import Context, Strategy
 
 log = logging.getLogger(__name__)
@@ -21,8 +22,11 @@ log = logging.getLogger(__name__)
 class SignalStrategy(Strategy):
     name = "signal"
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, plan: TradingPlan | None = None):
         super().__init__(cfg)
+        # Внешняя разметка рынка. Может только запретить сделку или добавить
+        # один голос — открыть позицию сама она не может.
+        self.plan = plan
         self.rsi_period = int(cfg.get("rsi_period", 14))
         self.rsi_buy = float(cfg.get("rsi_buy", 35.0))
         self.rsi_sell = float(cfg.get("rsi_sell", 65.0))
@@ -147,7 +151,12 @@ class SignalStrategy(Strategy):
             return []
 
         longs, shorts, snap = self.votes(closes)
-        log.info("Индикаторы %s | голоса: лонг=%d шорт=%d", snap, longs, shorts)
+        plan_note = ""
+        if self.plan is not None:
+            pl, ps, plan_note = self.plan.extra_votes(ctx.md.last)
+            longs, shorts = longs + pl, shorts + ps
+        log.info("Индикаторы %s | голоса: лонг=%d шорт=%d%s",
+                 snap, longs, shorts, f" | план: {plan_note}" if plan_note else "")
 
         pos = ctx.position
 
@@ -163,6 +172,10 @@ class SignalStrategy(Strategy):
 
         allow_long = self.direction in ("both", "long_only")
         allow_short = self.direction in ("both", "short_only")
+        if self.plan is not None:
+            # План действует как фильтр: против его смещения бот не входит.
+            allow_long = allow_long and self.plan.allows("Buy", ctx.md.last)
+            allow_short = allow_short and self.plan.allows("Sell", ctx.md.last)
 
         if allow_long and longs >= self.min_confluence and longs > shorts:
             return [self._entry("Buy", ctx, longs, snap)]
@@ -186,6 +199,18 @@ class SignalStrategy(Strategy):
             tp, sl = price * (1 + self.tp_pct), price * (1 - self.sl_pct)
         else:
             tp, sl = price * (1 - self.tp_pct), price * (1 + self.sl_pct)
+
+        # Уровень плана перед расчётным тейком — более реалистичная цель:
+        # там стоят чужие заявки, и цена скорее развернётся, чем пройдёт насквозь.
+        if self.plan is not None:
+            level = self.plan.target_for(side, price)
+            if level is not None and (level < tp if side == "Buy" else level > tp):
+                min_move = price * self.tp_pct / 2      # но не ближе половины тейка
+                ok = level >= price + min_move if side == "Buy" else level <= price - min_move
+                if ok:
+                    log.info("Тейк-профит подтянут к уровню плана: %s вместо %s",
+                             level, round(float(tp), 2))
+                    tp = level
         return Action(
             kind=kind, side=side, qty=qty,
             price=price if kind == "limit" else None,

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from .exchange import Exchange, FatalExchangeError, StaleDataError
 from .models import Action, RiskHalt, RiskReject
+from .plan import TradingPlan
 from .risk import RiskManager
 from .strategies import build
 from .strategies.base import Context
@@ -56,7 +57,21 @@ def confirm_mainnet(cfg: dict) -> None:
 def run(cfg: dict, dry_run: bool) -> int:
     strat_cfg = cfg["strategy"]
     name = strat_cfg["name"]
-    strategy = build(name, strat_cfg.get(name, {}))
+
+    plan = None
+    plan_path = cfg.get("plan_file")
+    if plan_path:
+        if not Path(plan_path).exists():
+            log.error("Файл плана %s не найден", plan_path)
+            return 1
+        plan = TradingPlan.load(plan_path)
+        if plan.symbol != cfg["symbol"]:
+            log.error("План составлен для %s, а бот торгует %s", plan.symbol, cfg["symbol"])
+            return 1
+        if plan.note:
+            log.info("Сценарий плана: %s", " ".join(plan.note.split()))
+
+    strategy = build(name, strat_cfg.get(name, {}), plan=plan)
     strategy.validate(cfg.get("fees", {}))
 
     ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""), dry_run)
