@@ -147,3 +147,77 @@ def test_maker_rejects_spread_below_fee():
         assert "комиссию мейкера" in str(exc)
     else:
         raise AssertionError("должна была быть ошибка: спред меньше комиссии")
+
+
+def _ctx(closes, bar=1, pos=None):
+    from decimal import Decimal
+    from bot.models import Account, Instrument, MarketData, Position
+    from bot.strategies.base import Context
+    return Context(
+        md=MarketData("ETHUSDT", Decimal("2463.28"), Decimal("2463.30"),
+                      Decimal("2463.29"), closes, bar),
+        position=pos or Position("ETHUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(40), Decimal(23)),
+        instrument=Instrument("ETHUSDT", Decimal("0.01"), Decimal("0.01"),
+                              Decimal("0.01"), Decimal(5)),
+    )
+
+
+DOWN = [100.0] * 80 + [100 - i * 1.2 for i in range(1, 45)]
+UP = [100.0] * 80 + [100 + i * 1.2 for i in range(1, 45)]
+
+
+def test_bot_opens_long_on_oversold():
+    actions = SignalStrategy({"min_confluence": 2}).decide(_ctx(DOWN))
+    assert [a.side for a in actions] == ["Buy"]
+
+
+def test_bot_opens_short_on_overbought():
+    actions = SignalStrategy({"min_confluence": 2}).decide(_ctx(UP))
+    assert [a.side for a in actions] == ["Sell"]
+
+
+def test_long_only_skips_short_signal():
+    strat = SignalStrategy({"min_confluence": 2, "direction": "long_only"})
+    assert strat.decide(_ctx(UP)) == []
+    assert [a.side for a in SignalStrategy(
+        {"min_confluence": 2, "direction": "long_only"}).decide(_ctx(DOWN))] == ["Buy"]
+
+
+def test_short_only_skips_long_signal():
+    strat = SignalStrategy({"min_confluence": 2, "direction": "short_only"})
+    assert strat.decide(_ctx(DOWN)) == []
+    assert [a.side for a in SignalStrategy(
+        {"min_confluence": 2, "direction": "short_only"}).decide(_ctx(UP))] == ["Sell"]
+
+
+def test_bad_direction_rejected():
+    try:
+        SignalStrategy({"direction": "sideways"}).validate({"taker_bps": 5.5})
+    except ValueError as exc:
+        assert "direction" in str(exc)
+    else:
+        raise AssertionError("неизвестный direction должен отклоняться")
+
+
+def test_reversal_closes_open_position():
+    from decimal import Decimal
+    from bot.models import Position
+    long_pos = Position("ETHUSDT", "Buy", Decimal("0.02"), Decimal(2478), Decimal(0), Decimal(2463))
+    actions = SignalStrategy({"min_confluence": 2}).decide(_ctx(UP, pos=long_pos))
+    assert [a.kind for a in actions] == ["close"]
+
+
+def test_cooldown_does_not_block_first_entry():
+    """Кулдаун отсчитывается от последнего входа, а не от старта бота."""
+    assert SignalStrategy({"min_confluence": 2, "cooldown_bars": 10}).decide(_ctx(DOWN))
+
+
+def test_maker_quotes_both_sides():
+    from bot.strategies.maker import MakerStrategy
+    actions = MakerStrategy({"spread_bps": 8, "order_notional_usdt": 25}).decide(_ctx([]))
+    sides = [a.side for a in actions if a.kind == "limit"]
+    assert sorted(sides) == ["Buy", "Sell"]
+    bid = next(a for a in actions if a.side == "Buy")
+    ask = next(a for a in actions if a.side == "Sell")
+    assert bid.price < ask.price, "бид должен быть ниже аска"

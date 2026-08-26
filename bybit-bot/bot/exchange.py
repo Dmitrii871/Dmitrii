@@ -96,6 +96,24 @@ class Exchange:
         )
         return self._instrument
 
+    def check_position_mode(self) -> str:
+        """Бот рассчитан на односторонний режим (One-Way).
+
+        В хедж-режиме Bybit требует positionIdx у каждого ордера, иначе
+        заявки отклоняются. Молча торговать в таком режиме нельзя, поэтому
+        несовпадение — это ошибка запуска, а не предупреждение.
+        """
+        items = self._call("get_positions", category=self.category, symbol=self.symbol).get("list", [])
+        idx = {int(p.get("positionIdx", 0)) for p in items}
+        if idx - {0}:
+            raise RuntimeError(
+                f"Символ {self.symbol} в хедж-режиме (positionIdx={sorted(idx)}). "
+                "Бот работает в одностороннем режиме: переключите позиционный режим "
+                "на Bybit в 'Односторонний' (One-Way) для этого символа."
+            )
+        log.info("Режим позиций: односторонний (лонг и шорт по очереди, не одновременно)")
+        return "one-way"
+
     def set_leverage(self, leverage: int) -> None:
         try:
             self._call(

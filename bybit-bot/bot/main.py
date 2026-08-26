@@ -62,6 +62,7 @@ def run(cfg: dict, dry_run: bool) -> int:
     ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""), dry_run)
     risk = RiskManager(cfg["risk"])
     inst = ex.instrument()
+    ex.check_position_mode()
     if not dry_run:
         ex.set_leverage(int(cfg.get("leverage", 3)))
 

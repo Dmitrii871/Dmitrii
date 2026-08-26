@@ -97,6 +97,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     equity = 0.0
     curve = [0.0]
     trades: list[float] = []
+    by_side: dict[str, list[float]] = {"Buy": [], "Sell": []}
     pos_side: str | None = None
     entry = 0.0
     last_entry_bar = -10**9
@@ -119,6 +120,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
                 net = (gross - 2 * fee) * notional
                 equity += net
                 trades.append(net)
+                by_side[pos_side].append(net)
                 curve.append(equity)
                 pos_side = None
 
@@ -150,6 +152,14 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
         "profit_factor": (sum(wins) / abs(sum(losses))) if losses and sum(losses) else float("inf"),
         "max_drawdown": max_dd,
         "fees_paid": len(trades) * 2 * fee * notional,
+        "by_side": {
+            side: {
+                "trades": len(v),
+                "net_usdt": round(sum(v), 4),
+                "win_rate": round(len([x for x in v if x > 0]) / len(v), 4) if v else 0.0,
+            }
+            for side, v in by_side.items()
+        },
     }
 
 
@@ -200,9 +210,20 @@ def main() -> int:
     print(f"  Уплачено комиссий  {r['fees_paid']:>12.4f} USDT")
     print(f"  Макс. просадка     {r['max_drawdown']:>12.4f} USDT")
     print(f"  ЧИСТЫЙ РЕЗУЛЬТАТ   {r['net_usdt']:>12.4f} USDT")
+    print("-" * 56)
+    for side, label in (("Buy", "ЛОНГИ "), ("Sell", "ШОРТЫ")):
+        d = r["by_side"][side]
+        print(f"  {label}  сделок {d['trades']:>4} | винрейт {d['win_rate']:>6.1%} "
+              f"| итог {d['net_usdt']:>9.4f} USDT")
     print("=" * 56)
     if r["trades"] < 30:
         print("  ! Меньше 30 сделок — статистика недостоверна, возьмите больше истории")
+    longs, shorts = r["by_side"]["Buy"], r["by_side"]["Sell"]
+    if longs["trades"] >= 10 and shorts["trades"] >= 10:
+        if longs["net_usdt"] > 0 > shorts["net_usdt"]:
+            print("  ! Прибыль только в лонг. Проверьте direction: long_only")
+        elif shorts["net_usdt"] > 0 > longs["net_usdt"]:
+            print("  ! Прибыль только в шорт. Проверьте direction: short_only")
     if r["net_usdt"] <= 0:
         print("  ! Стратегия убыточна на этой истории. Не запускайте её на реальные деньги.")
     else:

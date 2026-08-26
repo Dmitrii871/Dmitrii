@@ -39,8 +39,12 @@ class SignalStrategy(Strategy):
         # market  -> вход рыночным ордером, комиссия тейкера
         # post_only -> вход лимиткой у ближней цены, комиссия мейкера
         self.entry_type = str(cfg.get("entry_type", "market")).lower()
+        # both -> торгуем в обе стороны; long_only / short_only -> одна сторона.
+        # Односторонний режим осмыслен на выраженном тренде или когда
+        # фандинг устойчиво платит в одну сторону.
+        self.direction = str(cfg.get("direction", "both")).lower()
         self.entry_ttl_seconds = int(cfg.get("entry_ttl_seconds", 90))
-        self._last_entry_bar = 0
+        self._last_entry_bar = -10**9   # кулдаун не должен блокировать первый вход
         self._bars_seen = 0
         self._prev_bar_time = 0
         self._pending_since: float | None = None
@@ -51,6 +55,8 @@ class SignalStrategy(Strategy):
     def validate(self, fees: dict) -> None:
         if self.entry_type not in ("market", "post_only"):
             raise ValueError("entry_type должен быть 'market' или 'post_only'")
+        if self.direction not in ("both", "long_only", "short_only"):
+            raise ValueError("direction должен быть 'both', 'long_only' или 'short_only'")
         taker = float(fees.get("taker_bps", 5.5))
         maker = float(fees.get("maker_bps", 2.0))
         # вход мейкером + выход по TP/SL тейкером; при market обе стороны тейкер
@@ -145,9 +151,12 @@ class SignalStrategy(Strategy):
         if self._bars_seen - self._last_entry_bar < self.cooldown_bars:
             return []
 
-        if longs >= self.min_confluence and longs > shorts:
+        allow_long = self.direction in ("both", "long_only")
+        allow_short = self.direction in ("both", "short_only")
+
+        if allow_long and longs >= self.min_confluence and longs > shorts:
             return [self._entry("Buy", ctx, longs, snap)]
-        if shorts >= self.min_confluence and shorts > longs:
+        if allow_short and shorts >= self.min_confluence and shorts > longs:
             return [self._entry("Sell", ctx, shorts, snap)]
         return []
 
