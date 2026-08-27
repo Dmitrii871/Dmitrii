@@ -104,8 +104,11 @@ def run(cfg: dict, dry_run: bool) -> int:
                 start_equity = float(account.equity)
 
             contexts: dict[str, object] = {}
-            for w in workers:
-                try:
+            gap = float(cfg.get("request_gap_seconds", 0.3))
+            for i, w in enumerate(workers):
+                if i and gap:
+                    time.sleep(gap)     # разносим запросы, иначе хвост списка
+                try:                     # получает пустые ответы от биржи
                     contexts[w.symbol] = w.build_context(account)
                     w.errors = 0
                 except StaleDataError as exc:

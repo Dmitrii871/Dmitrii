@@ -58,6 +58,23 @@ def _d(value: Any, default: str = "0") -> Decimal:
     return Decimal(str(value))
 
 
+def first_or_fail(res: dict, what: str, symbol: str):
+    """Первый элемент списка ответа или понятная ошибка.
+
+    Биржа при перегрузе возвращает retCode 0 с ПУСТЫМ списком. Обращение
+    к [0] давало 'list index out of range' — сообщение, по которому
+    невозможно понять, что произошло.
+    """
+    items = res.get("list") or []
+    if not items:
+        raise StaleDataError(
+            f"{symbol}: биржа вернула пустой ответ на {what}. "
+            "Обычно это лимит запросов — увеличьте poll_seconds "
+            "или request_gap_seconds."
+        )
+    return items[0]
+
+
 def quantize(value: Decimal, step: Decimal, mode=ROUND_DOWN) -> Decimal:
     """Приводит значение к сетке биржи. Цены — HALF_UP, количества — DOWN."""
     if step <= 0:
@@ -163,7 +180,7 @@ class Exchange:
         if self._instrument is not None:
             return self._instrument
         res = self._call("get_instruments_info", category=self.category, symbol=self.symbol)
-        item = res["list"][0]
+        item = first_or_fail(res, "справочник инструментов", self.symbol)
         lot, price = item["lotSizeFilter"], item["priceFilter"]
         self._instrument = Instrument(
             symbol=self.symbol,
@@ -224,7 +241,9 @@ class Exchange:
 
     # ------------------------------------------------------------- состояние
     def market_data(self, interval: str, bars: int = 200) -> MarketData:
-        tick = self._call("get_tickers", category=self.category, symbol=self.symbol)["list"][0]
+        tick = first_or_fail(
+            self._call("get_tickers", category=self.category, symbol=self.symbol),
+            "котировки", self.symbol)
         kl = self._call(
             "get_kline", category=self.category, symbol=self.symbol,
             interval=interval, limit=min(bars, 1000),
@@ -293,7 +312,7 @@ class Exchange:
         if self.public_only:
             return Account(equity=self._paper_equity, available=self._paper_equity)
         res = self._call("get_wallet_balance", accountType="UNIFIED")
-        acc = res["list"][0]
+        acc = first_or_fail(res, "баланс счёта", self.symbol)
         return Account(
             equity=_d(acc.get("totalEquity")),
             available=_d(acc.get("totalAvailableBalance")),
@@ -449,5 +468,7 @@ class Exchange:
             return resp.get("result", {})
 
     def market_price(self) -> Decimal:
-        tick = self._call("get_tickers", category=self.category, symbol=self.symbol)["list"][0]
+        tick = first_or_fail(
+            self._call("get_tickers", category=self.category, symbol=self.symbol),
+            "котировки", self.symbol)
         return _d(tick["lastPrice"])

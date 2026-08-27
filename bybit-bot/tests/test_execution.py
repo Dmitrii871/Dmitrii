@@ -171,3 +171,33 @@ def test_post_only_rejection_is_not_an_error():
     http.place_order = reject
     ex.execute(Action(kind="limit", side="Buy", qty=Decimal("0.02"),
                       price=Decimal("2463.28"), post_only=True))   # не должно бросить
+
+
+def test_empty_exchange_response_gives_clear_error():
+    """Биржа при перегрузе отдаёт retCode 0 с пустым списком.
+
+    Раньше это давало 'list index out of range' — сообщение, по которому
+    невозможно понять причину. Так падали последние символы в списке.
+    """
+    from bot.exchange import StaleDataError, first_or_fail
+    try:
+        first_or_fail({"list": []}, "котировки", "AVAXUSDT")
+    except StaleDataError as exc:
+        assert "AVAXUSDT" in str(exc) and "лимит запросов" in str(exc)
+    else:
+        raise AssertionError("пустой ответ обязан давать понятную ошибку")
+
+
+def test_missing_list_key_also_handled():
+    from bot.exchange import StaleDataError, first_or_fail
+    try:
+        first_or_fail({}, "баланс", "ETHUSDT")
+    except StaleDataError:
+        pass
+    else:
+        raise AssertionError("отсутствие ключа list тоже должно отлавливаться")
+
+
+def test_first_element_returned_when_present():
+    from bot.exchange import first_or_fail
+    assert first_or_fail({"list": [{"a": 1}, {"a": 2}]}, "x", "Y") == {"a": 1}
