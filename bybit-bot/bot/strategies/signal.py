@@ -261,15 +261,20 @@ class SignalStrategy(Strategy):
         else:
             self._pending_since = None
 
-        # считаем сигналы только один раз на закрытии свечи
+        # Индикаторы считаем КАЖДЫЙ цикл — они идут в журнал. Раньше расчёт
+        # стоял после выхода по неизменившейся свече, и при часовом
+        # таймфрейме журнал час подряд получал пустые колонки: по нему
+        # нельзя было понять, насколько бот был близок к сигналу.
+        longs, shorts, snap = self.votes(closes, ctx.md.highs, ctx.md.lows)
+        snap = {**snap, "голоса_лонг": longs, "голоса_шорт": shorts}
+        self.last_snapshot = snap
+
+        # Решения — по-прежнему только на закрытии свечи
         if ctx.md.bar_time != self._prev_bar_time:
             self._prev_bar_time = ctx.md.bar_time
             self._bars_seen += 1
         else:
             return []
-
-        longs, shorts, snap = self.votes(closes, ctx.md.highs, ctx.md.lows)
-        self.last_snapshot = snap
         plan_note = ""
         if self.plan is not None:
             pl, ps, plan_note = self.plan.extra_votes(ctx.md.last)

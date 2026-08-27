@@ -118,3 +118,84 @@ def test_journal_appends_without_duplicating_header(tmp_path):
 
 def test_no_journal_path_is_silent(tmp_path):
     PaperTrader().record(Decimal("1"), {}, [])      # не должно бросить
+
+
+def test_reduce_only_limit_fills_as_maker():
+    """Без этого выход в режиме maker_chase не считался мейкерским.
+
+    В maker_chase стратегия не ставит биржевой тейк-профит, а держит
+    reduce-only лимитку. Раньше бумажная позиция закрывалась только по
+    стопу или по таймауту, то есть всегда тейкером — и главный критерий
+    теста, доля мейкерских выходов, был неизмерим в принципе.
+    """
+    pt = PaperTrader()
+    pt.on_action(Action(kind="market", side="Buy", qty=Decimal("0.02")), Decimal("2463"))
+    pt.on_action(Action(kind="limit", side="Sell", qty=Decimal("0.02"),
+                        price=Decimal("2470"), reduce_only=True, post_only=True),
+                 Decimal("2463"))
+    pt.on_price(Decimal("2471"), Decimal("2462"))       # свеча прошила лимитку
+    assert pt.position is None
+    assert pt.trades[0]["maker_exit"] is True
+    assert pt.trades[0]["reason"] == "лимитный выход"
+    # комиссия обеих сторон по мейкерской ставке
+    expected = Decimal("2463") * Decimal("0.02") * Decimal("2") / Decimal(10_000) \
+        + Decimal("2470") * Decimal("0.02") * Decimal("2") / Decimal(10_000)
+    assert abs(Decimal(str(pt.trades[0]["fees"])) - expected) < Decimal("0.0001")
+
+
+def test_maker_exit_cheaper_than_taker_exit():
+    """Ради этой разницы всё и затевалось: 4.0 bp против 7.5 bp."""
+    maker, taker = PaperTrader(), PaperTrader()
+    for pt, exit_maker in ((maker, True), (taker, False)):
+        pt.on_action(Action(kind="market", side="Buy", qty=Decimal("1")), Decimal("100"))
+        if exit_maker:
+            pt.on_action(Action(kind="limit", side="Sell", qty=Decimal("1"),
+                                price=Decimal("101"), reduce_only=True), Decimal("100"))
+            pt.on_price(Decimal("101"), Decimal("100"))
+        else:
+            pt._close(Decimal("101"), "решение стратегии", maker=False)
+    assert maker.realized > taker.realized
+
+
+def test_cancel_all_removes_pending_exit():
+    """Перестановка лимитки: старая цена не должна исполниться задним числом."""
+    pt = PaperTrader()
+    pt.on_action(Action(kind="market", side="Buy", qty=Decimal("1")), Decimal("100"))
+    pt.on_action(Action(kind="limit", side="Sell", qty=Decimal("1"),
+                        price=Decimal("101"), reduce_only=True), Decimal("100"))
+    pt.on_action(Action(kind="cancel_all"), Decimal("100"))
+    pt.on_price(Decimal("102"), Decimal("99"))
+    assert pt.position is not None, "снятая заявка не может исполниться"
+
+
+def test_trades_survive_restart(tmp_path):
+    """Многодневный тест не должен обнуляться перезапуском бота."""
+    path = tmp_path / "BTCUSDT_trades.csv"
+    pt = PaperTrader(trades_path=str(path))
+    pt.on_action(entry(), Decimal("2463"))
+    pt.on_price(Decimal("2501"), Decimal("2460"))
+
+    import csv
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "тейк-профит"
+
+    # второй запуск дописывает, а не затирает
+    pt2 = PaperTrader(trades_path=str(path))
+    pt2.on_action(entry(), Decimal("2463"))
+    pt2.on_price(Decimal("2501"), Decimal("2460"))
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 2
+
+
+def test_maker_share_in_summary():
+    pt = PaperTrader()
+    pt.on_action(Action(kind="market", side="Buy", qty=Decimal("1")), Decimal("100"))
+    pt.on_action(Action(kind="limit", side="Sell", qty=Decimal("1"),
+                        price=Decimal("101"), reduce_only=True), Decimal("100"))
+    pt.on_price(Decimal("101"), Decimal("100"))
+    pt.on_action(Action(kind="market", side="Buy", qty=Decimal("1")), Decimal("100"))
+    pt._close(Decimal("99"), "стоп-лосс", maker=False)
+    s = pt.summary()
+    assert s["trades"] == 2 and s["maker_exits"] == 1
+    assert abs(s["maker_share"] - 0.5) < 1e-9

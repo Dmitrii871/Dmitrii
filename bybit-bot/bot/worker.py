@@ -102,6 +102,7 @@ def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
             maker_bps=float(fees.get("maker_bps", 2.0)),
             taker_bps=float(fees.get("taker_bps", 5.5)),
             journal_path=(f"{sym}_{cfg['journal_file']}" if cfg.get("journal_file") else None),
+            trades_path=(f"{sym}_{cfg['trades_file']}" if cfg.get("trades_file") else None),
         ) if dry_run else None
         workers.append(SymbolWorker(
             symbol=sym, exchange=ex, strategy=strat, interval=interval,
