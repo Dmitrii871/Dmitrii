@@ -126,7 +126,14 @@ def main() -> int:
         seen = f"RSI {rsi or '—':<6} голоса {vl or '?'}/{vs or '?'}"
         if last.get("режим"):
             seen += f"  {last['режим']}"
+        if last.get("позиция"):
+            seen += f"  << ПОЗИЦИЯ {last['позиция']}"
         print(f"  {sym:<12}{len(rows):>7}{age:>14}  {seen}")
+        decisions = [r for r in rows if r.get("действие") not in ("", "нет")]
+        if decisions:
+            d = decisions[-1]
+            print(f"  {'':12}последнее решение: {d.get('действие','')} "
+                  f"({_age(d.get('ts',''))}) — {d.get('причина','')[:80]}")
     if stale:
         print(f"  ОТСТАЮТ (>5 мин): {', '.join(stale)}")
 
@@ -139,7 +146,13 @@ def main() -> int:
         per_symbol[path.split("_")[0]] = len(rows)
         trades.extend(rows)
 
-    print(f"\nСДЕЛКИ: {len(trades)}")
+    open_pos = []
+    for path in journals:
+        rows = _read(path)
+        if rows and rows[-1].get("позиция"):
+            open_pos.append(f"{path.split('_')[0]} {rows[-1]['позиция']}")
+    print(f"\nОТКРЫТЫЕ ПОЗИЦИИ: {', '.join(open_pos) if open_pos else 'нет'}")
+    print(f"СДЕЛКИ (закрытые): {len(trades)}")
     if not trades:
         print("  Пока ни одной. Вход бывает лишь на закрытии свечи —")
         print("  при часовом таймфрейме это до нескольких сделок в сутки.")
