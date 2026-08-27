@@ -37,7 +37,8 @@ def _proc() -> str:
         pid, _, args = line.strip().partition(" ")
         if not pid.isdigit() or int(pid) in mine:
             continue
-        if "bot.main" in args and "python" in args and "status.py" not in args:
+        low = args.lower()
+        if "bot.main" in low and "python" in low and "status.py" not in low:
             found.append(pid)
     if not found:
         return "НЕ ЗАПУЩЕН"
@@ -58,8 +59,25 @@ def _age(ts: str) -> str:
 
 
 def _read(path: str) -> list[dict]:
-    with open(path, newline="", encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
+    """Строки CSV; повреждённые или безголовые файлы — пустой список.
+
+    Отчёт обязан пережить любой мусор в файлах: его задача — рассказать
+    о проблеме, а не упасть от неё.
+    """
+    try:
+        with open(path, newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        return [r for r in rows if r.get("ts")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _read_trades(path: str) -> list[dict]:
+    try:
+        with open(path, newline="", encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def main() -> int:
@@ -67,7 +85,13 @@ def main() -> int:
     print("=" * 66)
     print(f"  СОСТОЯНИЕ ТЕСТА  |  {datetime.now().strftime('%d.%m %H:%M')}")
     print("=" * 66)
-    print(f"Процесс бота: {_proc()}")
+    proc = _proc()
+    print(f"Процесс бота: {proc}")
+    if "работает" not in proc and Path("bot.out").exists():
+        print("\nПоследние строки bot.out — почему он не работает:")
+        lines = Path("bot.out").read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in lines[-12:]:
+            print(f"  {line}")
 
     # ---------------------------------------------------------- символы
     journals = sorted(glob.glob("*_journal.csv"))
@@ -82,7 +106,7 @@ def main() -> int:
         sym = path.split("_")[0]
         rows = _read(path)
         if not rows:
-            print(f"  {sym:<12}{0:>7}{'—':>14}  пусто")
+            print(f"  {sym:<12}{0:>7}{'—':>14}  пусто или повреждён — ./start.sh пересоздаст")
             stale.append(sym)
             continue
         last = rows[-1]
@@ -103,7 +127,7 @@ def main() -> int:
     trades: list[dict] = []
     per_symbol: Counter = Counter()
     for path in trade_files:
-        rows = _read(path)
+        rows = [r for r in _read_trades(path) if r.get("net")]
         per_symbol[path.split("_")[0]] = len(rows)
         trades.extend(rows)
 

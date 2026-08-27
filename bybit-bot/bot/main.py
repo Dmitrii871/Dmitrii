@@ -33,6 +33,18 @@ def _handle_signal(signum, frame):  # noqa: ARG001
     _stop = True
 
 
+def _sleep(seconds: float) -> None:
+    """Сон, прерываемый сигналом остановки.
+
+    time.sleep(30) целиком доживал до конца и после Ctrl+C или pkill:
+    бот «ещё жил» до половины минуты, а скрипт перезапуска в это время
+    уже поднимал новый экземпляр — и они писали в один журнал вперемешку.
+    """
+    end = time.monotonic() + seconds
+    while not _stop and time.monotonic() < end:
+        time.sleep(min(1.0, max(0.0, end - time.monotonic())))
+
+
 def setup_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -123,7 +135,7 @@ def run(cfg: dict, dry_run: bool) -> int:
                 if stale_streak >= 10:
                     log.error("Данные не приходят %d циклов подряд.", stale_streak)
                     stale_streak = 0
-                time.sleep(poll)
+                _sleep(poll)
                 continue
             stale_streak = 0
 
@@ -159,7 +171,7 @@ def run(cfg: dict, dry_run: bool) -> int:
 
         except StaleDataError as exc:
             log.warning("Пропуск цикла: %s", exc)
-            time.sleep(poll)
+            _sleep(poll)
             continue
         except FatalExchangeError as exc:
             log.error("НЕИСПРАВИМАЯ ОШИБКА БИРЖИ: %s", exc)
@@ -179,10 +191,10 @@ def run(cfg: dict, dry_run: bool) -> int:
             break
         except Exception as exc:  # noqa: BLE001 — цикл не должен падать от одной ошибки
             log.exception("Ошибка в цикле: %s", exc)
-            time.sleep(min(poll * 3, 60))
+            _sleep(min(poll * 3, 60))
             continue
 
-        time.sleep(poll)
+        _sleep(poll)
 
     if dry_run:
         log.info("=" * 60)

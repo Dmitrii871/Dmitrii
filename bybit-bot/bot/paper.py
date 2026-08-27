@@ -49,7 +49,6 @@ class PaperTrader:
     position: PaperPosition | None = None
     trades: list[dict] = field(default_factory=list)
     realized: Decimal = Decimal(0)
-    _header_written: bool = False
 
     # ------------------------------------------------------------- сделки
     def _fee(self, notional: Decimal, maker: bool) -> Decimal:
@@ -199,10 +198,12 @@ class PaperTrader:
             "позиция": self.position.side if self.position else "",
             "итог_usdt": float(self.realized),
         }
-        write_header = not self._header_written and not path.exists()
+        # Заголовок — по состоянию ФАЙЛА, а не по памяти процесса. Флаг
+        # «уже писал» переживал удаление файла: бот продолжал дописывать
+        # строки без заголовка, и такой CSV не читался ни отчётом, ни Excel.
+        write_header = not path.exists() or path.stat().st_size == 0
         with path.open("a", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=list(row))
             if write_header:
                 w.writeheader()
             w.writerow(row)
-        self._header_written = True
