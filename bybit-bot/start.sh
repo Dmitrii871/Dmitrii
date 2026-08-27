@@ -4,6 +4,23 @@
 # запускает новый, не даёт Mac уснуть и показывает статус.
 cd "$(dirname "$0")" || exit 1
 
+# Ищем питон с библиотеками бота сами: в новом окне терминала venv не
+# активирован, и системный python3 падает с "No module named 'yaml'".
+PY=python3
+for cand in ./.venv/bin/python3 ../.venv/bin/python3 "$HOME/Dmitrii/.venv/bin/python3"; do
+    if [ -x "$cand" ]; then
+        PY="$cand"
+        break
+    fi
+done
+if ! "$PY" -c "import yaml, pybit, dotenv" 2>/dev/null; then
+    echo "Питон '$PY' не видит библиотеки бота (yaml/pybit/dotenv)."
+    echo "Установите их один раз:"
+    echo "  $PY -m pip install -r requirements.txt"
+    exit 1
+fi
+echo "Питон: $PY"
+
 if pgrep -f "[Pp]ython.*bot[.]main" >/dev/null 2>&1; then
     echo "Останавливаю прежний экземпляр..."
     pkill -f "[Pp]ython.*bot[.]main"
@@ -36,7 +53,7 @@ if [ -s bot.out ]; then
     cat bot.out >> bot.history.log
 fi
 : > bot.out
-nohup python3 -m bot.main --config config.yaml >> bot.out 2>&1 &
+nohup "$PY" -m bot.main --config config.yaml >> bot.out 2>&1 &
 PID=$!
 echo "$PID" > bot.pid
 echo "Бот запущен, PID $PID"
@@ -63,4 +80,4 @@ while [ "$i" -lt 60 ]; do
     sleep 2
 done
 
-exec python3 tools/status.py
+exec "$PY" tools/status.py
