@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import glob
 import os
 import subprocess
@@ -88,6 +89,31 @@ def _read_trades(path: str) -> list[dict]:
         return []
 
 
+def _trades_from_log() -> dict:
+    """Сделки текущей сессии по строкам [БУМАГА] в bot.out.
+
+    Основной источник — файлы *_trades.csv, но у конфигов, созданных до
+    их появления, файлы не велись: сделки совершались и existed только
+    в памяти бота. Лог — единственный след, по нему хотя бы видно счёт.
+    """
+    out = {"entries": 0, "exits": 0, "maker": 0, "net": 0.0}
+    try:
+        lines = Path("bot.out").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        if "[БУМАГА] вход" in line:
+            out["entries"] += 1
+        elif "[БУМАГА] выход" in line:
+            out["exits"] += 1
+            if "(лимитный выход)" in line:
+                out["maker"] += 1
+            m = re.search(r"сделка ([+-]?[\d.]+) USDT", line)
+            if m:
+                out["net"] += float(m.group(1))
+    return out
+
+
 def main() -> int:
     os.chdir(Path(__file__).resolve().parents[1])
     print("=" * 66)
@@ -153,9 +179,17 @@ def main() -> int:
             open_pos.append(f"{path.split('_')[0]} {rows[-1]['позиция']}")
     print(f"\nОТКРЫТЫЕ ПОЗИЦИИ: {', '.join(open_pos) if open_pos else 'нет'}")
     print(f"СДЕЛКИ (закрытые): {len(trades)}")
+    log_t = _trades_from_log()
+    if log_t["exits"] > len(trades):
+        print(f"  по логу текущей сессии: входов {log_t['entries']}, "
+          f"выходов {log_t['exits']} (мейкером {log_t['maker']}), "
+          f"итог {log_t['net']:+.4f} USDT")
+        print("  (файлы сделок не велись — конфиг старее этой возможности; "
+              "после ./start.sh будут вестись)")
     if not trades:
-        print("  Пока ни одной. Вход бывает лишь на закрытии свечи —")
-        print("  при часовом таймфрейме это до нескольких сделок в сутки.")
+        if not log_t["exits"]:
+            print("  Пока ни одной. Вход бывает лишь на закрытии свечи —")
+            print("  при часовом таймфрейме это до нескольких сделок в сутки.")
         return 0
 
     nets = [float(t["net"]) for t in trades]
