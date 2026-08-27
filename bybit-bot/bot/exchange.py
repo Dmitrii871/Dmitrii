@@ -66,12 +66,23 @@ def quantize(value: Decimal, step: Decimal, mode=ROUND_DOWN) -> Decimal:
 
 
 class Exchange:
-    def __init__(self, cfg: dict, api_key: str, api_secret: str, dry_run: bool):
+    # Значения по умолчанию на уровне класса: объект иногда собирают
+    # в обход __init__ (тесты с заглушкой HTTP), и обращение к ним
+    # не должно падать.
+    public_only: bool = False
+    dry_run: bool = False
+
+    def __init__(self, cfg: dict, api_key: str, api_secret: str, dry_run: bool,
+                 paper_equity: float = 0.0):
         self.symbol: str = cfg["symbol"]
         self.category: str = cfg.get("category", "linear")
         self.testnet: bool = bool(cfg.get("testnet", True))
         self.dry_run = dry_run
         self._instrument: Instrument | None = None
+        # Сухой прогон без ключей: свечи и стакан публичные, ордера не уходят,
+        # а баланс берётся условный. Так логику можно проверить сразу.
+        self.public_only = dry_run and not api_key
+        self._paper_equity = Decimal(str(paper_equity or 100))
 
         from pybit.unified_trading import HTTP  # импорт здесь: тесты не требуют pybit
 
@@ -82,8 +93,10 @@ class Exchange:
             recv_window=10_000,
         )
         log.info(
-            "Подключение к Bybit %s | символ %s | dry_run=%s",
+            "Подключение к Bybit %s | символ %s | dry_run=%s%s",
             "TESTNET" if self.testnet else "MAINNET", self.symbol, dry_run,
+            " | БЕЗ КЛЮЧЕЙ: только публичные данные, условный баланс "
+            f"{float(self._paper_equity):.0f} USDT" if self.public_only else "",
         )
 
     # ---------------------------------------------------------------- вызовы
@@ -123,6 +136,8 @@ class Exchange:
         raise RuntimeError(f"{method} не удался") from last_err
 
     def check_clock(self) -> float:
+        if self.public_only:
+            return 0.0
         """Расхождение локальных часов с биржей.
 
         Bybit отвергает запросы, чей timestamp вне recv_window. Часы VPS
@@ -165,6 +180,8 @@ class Exchange:
         return self._instrument
 
     def check_position_mode(self) -> str:
+        if self.public_only:
+            return "one-way"
         """Бот рассчитан на односторонний режим (One-Way).
 
         В хедж-режиме Bybit требует positionIdx у каждого ордера, иначе
@@ -255,6 +272,8 @@ class Exchange:
             )
 
     def position(self) -> Position:
+        if self.public_only:
+            return Position(self.symbol, "", Decimal(0), Decimal(0), Decimal(0), Decimal(0))
         res = self._call("get_positions", category=self.category, symbol=self.symbol)
         items = res.get("list", [])
         if not items:
@@ -271,6 +290,8 @@ class Exchange:
         )
 
     def account(self) -> Account:
+        if self.public_only:
+            return Account(equity=self._paper_equity, available=self._paper_equity)
         res = self._call("get_wallet_balance", accountType="UNIFIED")
         acc = res["list"][0]
         return Account(
@@ -279,6 +300,8 @@ class Exchange:
         )
 
     def open_orders(self) -> list[dict]:
+        if self.public_only:
+            return []
         return self._call("get_open_orders", category=self.category, symbol=self.symbol).get("list", [])
 
     # --------------------------------------------------------------- ордера

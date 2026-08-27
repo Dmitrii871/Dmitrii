@@ -76,7 +76,8 @@ def run(cfg: dict, dry_run: bool) -> int:
     strategy = build(name, strat_cfg.get(name, {}), plan=plan)
     strategy.validate(cfg.get("fees", {}))
 
-    ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""), dry_run)
+    ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""),
+                  dry_run, paper_equity=float(cfg.get("paper_equity", 500)))
     risk = RiskManager(cfg["risk"])
     ex.check_clock()
     inst = ex.instrument()
@@ -238,8 +239,11 @@ def main() -> int:
         confirm_mainnet(cfg)
 
     if not os.getenv("BYBIT_API_KEY"):
-        log.error("Не заданы BYBIT_API_KEY / BYBIT_API_SECRET. Скопируйте .env.example в .env")
-        return 1
+        if not dry_run:
+            log.error("Не заданы BYBIT_API_KEY / BYBIT_API_SECRET. "
+                      "Скопируйте .env.example в .env")
+            return 1
+        log.warning("Ключей нет — сухой прогон на публичных данных с условным балансом.")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
