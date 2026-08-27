@@ -86,3 +86,44 @@ def test_worker_reports_paper_position_when_keyless():
                  Decimal("2463"))
     pos = w.position()
     assert pos.side == "Buy" and pos.size == Decimal("0.02")
+
+
+def test_worker_requests_more_bars_than_warmup():
+    """Запас над warmup обязателен: последняя свеча отбрасывается.
+
+    Запрос ровно warmup_bars() давал стратегии на бар меньше нужного,
+    и она каждый цикл молча выходила по «мало данных» — бот неделями
+    выглядел работающим, не посчитав ни одного сигнала.
+    """
+    from bot.strategies import build
+    from bot.worker import warmup_for
+
+    for name, scfg in (("signal", {}), ("maker", {})):
+        strat = build(name, scfg)
+        assert warmup_for(strat) > strat.warmup_bars(), (
+            f"{name}: после отброса незакрытой свечи стратегии не хватит истории")
+
+
+def test_signal_reports_short_history():
+    """Ранний выход по нехватке данных обязан быть виден в снапшоте."""
+    from decimal import Decimal
+
+    from bot.strategies import build
+    from bot.strategies.base import Context
+    from bot.models import Account, Instrument, MarketData, Position
+
+    strat = build("signal", {})
+    n = strat.warmup_bars() - 1
+    md = MarketData(symbol="ETHUSDT", bid=Decimal("1"), ask=Decimal("2"),
+                    last=Decimal("1.5"), closes=[1.0] * n, highs=[1.0] * n,
+                    lows=[1.0] * n, bar_time=0)
+    ctx = Context(
+        md=md,
+        position=Position("ETHUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(100), Decimal(100)),
+        instrument=Instrument("ETHUSDT", Decimal("0.01"), Decimal("0.01"),
+                              Decimal("0.01"), Decimal("5")),
+        open_orders=[],
+    )
+    assert strat.decide(ctx) == []
+    assert "мало данных" in strat.last_snapshot.get("причина", "")

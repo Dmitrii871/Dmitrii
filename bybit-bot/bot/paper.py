@@ -194,7 +194,8 @@ class PaperTrader:
             "голоса_лонг": snapshot.get("голоса_лонг", ""),
             "голоса_шорт": snapshot.get("голоса_шорт", ""),
             "действие": "; ".join(a.describe() for a in actions) or "нет",
-            "причина": "; ".join(a.reason for a in actions if a.reason),
+            "причина": "; ".join(a.reason for a in actions if a.reason)
+                       or snapshot.get("причина", ""),
             "позиция": self.position.side if self.position else "",
             "итог_usdt": float(self.realized),
         }

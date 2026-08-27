@@ -237,6 +237,12 @@ class SignalStrategy(Strategy):
     def decide(self, ctx: Context) -> list[Action]:
         closes = ctx.md.closes
         if len(closes) < self.warmup_bars():
+            # Молчать здесь нельзя: именно так потерялись недели теста —
+            # бот выглядел работающим, но не считал ни одного сигнала.
+            self.last_snapshot = {"причина": f"мало данных: {len(closes)} баров "
+                                             f"из {self.warmup_bars()}"}
+            log.warning("Мало данных: %d баров при необходимых %d — сигналы не считаются",
+                        len(closes), self.warmup_bars())
             return []
 
         # Частичное исполнение: позиция уже открыта, но часть заявки висит.

@@ -78,6 +78,18 @@ class SymbolWorker:
         return ctx.position.notional()
 
 
+def warmup_for(strat) -> int:
+    """Сколько свечей запрашивать у биржи для этой стратегии.
+
+    Обязательно с запасом над warmup_bars(): последняя свеча ещё не
+    закрыта и отбрасывается. Запрос ровно warmup_bars() давал стратегии
+    на бар меньше необходимого, и она каждый цикл МОЛЧА выходила по
+    «мало данных» — бот неделями выглядел работающим, не посчитав
+    ни одного сигнала.
+    """
+    return max(strat.warmup_bars() + 5, 60)
+
+
 def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
                  plan=None) -> list[SymbolWorker]:
     """Список символов из конфига; одиночный symbol тоже поддерживается."""
@@ -106,7 +118,7 @@ def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
         ) if dry_run else None
         workers.append(SymbolWorker(
             symbol=sym, exchange=ex, strategy=strat, interval=interval,
-            warmup=max(strat.warmup_bars(), 60), paper=paper,
+            warmup=warmup_for(strat), paper=paper,
         ))
     log.info("Символов в работе: %d — %s", len(workers), ", ".join(symbols))
     return workers
