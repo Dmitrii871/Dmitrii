@@ -15,6 +15,7 @@ import yaml
 from dotenv import load_dotenv
 
 from .exchange import FatalExchangeError, StaleDataError
+from .lockfile import AlreadyRunning, single_instance
 from .models import Action, RiskHalt, RiskReject
 from .plan import TradingPlan
 from .worker import aggregate_summary, make_workers
@@ -240,7 +241,14 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-    return run(cfg, dry_run)
+
+    # Второй экземпляр перемешал бы журнал и считал бы риск по половине позиций
+    try:
+        with single_instance(cfg.get("lock_file", "./bot.lock")):
+            return run(cfg, dry_run)
+    except AlreadyRunning as exc:
+        log.error("%s", exc)
+        return 1
 
 
 if __name__ == "__main__":

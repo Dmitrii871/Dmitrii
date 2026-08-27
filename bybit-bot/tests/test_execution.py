@@ -260,3 +260,95 @@ def test_http_client_restored_after_public_call():
     ex.http, ex.public = priv, pub
     ex.market_price()
     assert ex.http is priv, "после публичного вызова клиент обязан вернуться"
+
+
+def test_every_market_data_call_uses_mainnet_client():
+    """Не только котировки, а ВСЕ рыночные запросы.
+
+    Проверка по одному get_tickers пропустила реальную ошибку: котировки
+    ходили на основную сеть, а get_kline остался на testnet. У AVAXUSDT
+    и LTCUSDT свечей на testnet нет — бот падал на пустом списке; у пар,
+    где они есть, стратегия считала сигналы по синтетическим ценам.
+    Поэтому тест смотрит на весь набор вызовов, а не на один.
+    """
+    import time as _t
+
+    ex = Exchange.__new__(Exchange)
+    ex.symbol, ex.category, ex.testnet, ex.dry_run = "AVAXUSDT", "linear", True, True
+    calls: list[tuple[str, str]] = []
+    now_ms = int(_t.time() * 1000)
+
+    class Client:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get_tickers(self, **kw):
+            calls.append((self.tag, "get_tickers"))
+            return {"retCode": 0, "result": {"list": [
+                {"lastPrice": "20", "bid1Price": "19.99", "ask1Price": "20.01"}]}}
+
+        def get_kline(self, **kw):
+            calls.append((self.tag, "get_kline"))
+            # от новых к старым, последняя ещё не закрыта
+            rows = [[str(now_ms - i * 180_000), "20", "21", "19", "20", "1", "1"]
+                    for i in range(5)]
+            return {"retCode": 0, "result": {"list": rows}}
+
+    ex.http = Client("testnet")
+    ex.public = Client("mainnet")
+    md = ex.market_data("3", bars=5)
+
+    assert calls, "market_data обязана обратиться к бирже"
+    wrong = [c for c in calls if c[0] != "mainnet"]
+    assert not wrong, f"эти запросы ушли на testnet: {wrong}"
+    assert {c[1] for c in calls} == {"get_tickers", "get_kline"}
+    assert len(md.closes) == 4, "последняя (незакрытая) свеча отбрасывается"
+
+
+def test_private_calls_never_routed_to_public_client():
+    """Приватные методы обязаны уходить туда, куда указано в конфиге."""
+    ex = Exchange.__new__(Exchange)
+    ex.symbol, ex.category, ex.testnet = "ETHUSDT", "linear", True
+    seen = []
+
+    class Client:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get_wallet_balance(self, **kw):
+            seen.append(self.tag)
+            return {"retCode": 0, "result": {"list": [{"coin": [
+                {"coin": "USDT", "walletBalance": "500", "availableToWithdraw": "500"}]}]}}
+
+    ex.http, ex.public, ex.public_only = Client("testnet"), Client("mainnet"), False
+    ex.account()
+    assert seen == ["testnet"], "баланс не должен браться с чужой сети"
+
+
+def test_second_instance_refused(tmp_path):
+    """Два бота на один счёт — перемешанный журнал и риск по половине позиций."""
+    import subprocess
+    from bot.lockfile import single_instance
+
+    root = Path(__file__).resolve().parents[1]
+    lock = tmp_path / "bot.lock"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(root)!r})\n"
+        "from bot.lockfile import single_instance, AlreadyRunning\n"
+        "try:\n"
+        f"    single_instance({str(lock)!r}).__enter__()\n"
+        "    sys.exit(0)\n"
+        "except AlreadyRunning:\n"
+        "    sys.exit(7)\n",
+        encoding="utf-8",
+    )
+
+    with single_instance(str(lock)):
+        code = subprocess.run([sys.executable, str(child)]).returncode
+    assert code == 7, "второй экземпляр обязан получить отказ"
+
+    # После выхода из блокировки запуск снова разрешён
+    with single_instance(str(lock)):
+        pass

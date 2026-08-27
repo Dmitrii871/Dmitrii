@@ -6,6 +6,8 @@ diagnostics.json
 # Рабочие файлы
 STOP
 state.json
+bot.lock
+bot.out
 *.log
 *.csv
 

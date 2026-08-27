@@ -37,6 +37,16 @@ FATAL = (
     "unmatched ip", "permission denied",
 )
 
+# Методы, которым не нужна подпись. Их всегда обслуживает основная сеть:
+# на testnet у половины пар нет ни свечей, ни стакана, а там где есть —
+# цены синтетические. Маршрутизация живёт здесь, а не на месте вызова,
+# потому что один пропущенный вызов молча портит все данные стратегии.
+PUBLIC_METHODS = frozenset({
+    "get_kline", "get_tickers", "get_instruments_info", "get_orderbook",
+    "get_server_time", "get_funding_rate_history", "get_public_trade_history",
+    "get_mark_price_kline", "get_index_price_kline", "get_open_interest",
+})
+
 # Расхождение часов больше этого — подпись начнёт отвергаться биржей
 MAX_CLOCK_DRIFT_MS = 2_000
 # Данные старше стольких секунд считаем протухшими и не торгуем по ним
@@ -127,14 +137,21 @@ class Exchange:
 
     # ---------------------------------------------------------------- вызовы
     def _call_public(self, method: str, **kwargs) -> dict:
-        """Публичные данные с основной сети, с той же обработкой ошибок."""
-        if self.public is None:
-            return self._call(method, **kwargs)
-        saved, self.http = self.http, self.public
-        try:
-            return self._call(method, **kwargs)
-        finally:
-            self.http = saved
+        """Явное имя для публичных запросов. Маршрут выбирает _call."""
+        return self._call(method, **kwargs)
+
+    def _client_for(self, method: str):
+        """Публичные методы — на основную сеть, приватные — куда указано в конфиге.
+
+        Раньше выбор делался на месте вызова, и get_kline остался на testnet:
+        котировки приходили с основной сети, а свечи — с тестовой. У AVAXUSDT
+        и LTCUSDT свечей на testnet нет вовсе, и бот падал на пустом списке;
+        у BTCUSDT они есть, но синтетические — стратегия считала сигналы
+        по несуществующему рынку. Поэтому маршрут теперь один, здесь.
+        """
+        if self.public is not None and method in PUBLIC_METHODS:
+            return self.public
+        return self.http
 
     def _call(self, method: str, **kwargs) -> dict:
         """Вызов API с классификацией ошибок и повтором временных сбоев.
@@ -150,7 +167,7 @@ class Exchange:
         last_err: Exception | None = None
         for attempt in range(4):
             try:
-                resp = getattr(self.http, method)(**kwargs)
+                resp = getattr(self._client_for(method), method)(**kwargs)
                 code = resp.get("retCode")
                 if code != 0:
                     raise RuntimeError(f"{method}: {resp.get('retMsg')} (retCode={code})")
@@ -263,7 +280,7 @@ class Exchange:
         tick = first_or_fail(
             self._call_public("get_tickers", category=self.category, symbol=self.symbol),
             "котировки", self.symbol)
-        kl = self._call(
+        kl = self._call_public(
             "get_kline", category=self.category, symbol=self.symbol,
             interval=interval, limit=min(bars, 1000),
         )["list"]
