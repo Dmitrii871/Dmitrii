@@ -44,6 +44,14 @@ def _proc() -> str:
         return "НЕ ЗАПУЩЕН"
     if len(found) > 1:
         return f"ВНИМАНИЕ: экземпляров {len(found)} (PID {', '.join(found)}) — должен быть один"
+    expected = ""
+    try:
+        expected = Path("bot.pid").read_text().strip()
+    except OSError:
+        pass
+    if expected and found[0] != expected:
+        return (f"ВНИМАНИЕ: работает PID {found[0]}, но start.sh запускал {expected}. "
+                "Это уцелевший СТАРЫЙ экземпляр — выполните ./start.sh")
     return f"работает, PID {found[0]}"
 
 

@@ -4,15 +4,15 @@
 # запускает новый, не даёт Mac уснуть и показывает статус.
 cd "$(dirname "$0")" || exit 1
 
-if pgrep -f "python.*bot\.main" >/dev/null 2>&1; then
+if pgrep -f "[Pp]ython.*bot[.]main" >/dev/null 2>&1; then
     echo "Останавливаю прежний экземпляр..."
-    pkill -f "python.*bot\.main"
+    pkill -f "[Pp]ython.*bot[.]main"
     i=0
-    while pgrep -f "python.*bot\.main" >/dev/null 2>&1; do
+    while pgrep -f "[Pp]ython.*bot[.]main" >/dev/null 2>&1; do
         i=$((i+1))
         if [ "$i" -gt 40 ]; then
             echo "Прежний экземпляр не остановился за 40 с — прекращаю принудительно."
-            pkill -9 -f "python.*bot\.main"
+            pkill -9 -f "[Pp]ython.*bot[.]main"
             sleep 2
             break
         fi
@@ -34,6 +34,7 @@ done
 : > bot.out
 nohup python3 -m bot.main --config config.yaml >> bot.out 2>&1 &
 PID=$!
+echo "$PID" > bot.pid
 echo "Бот запущен, PID $PID"
 
 # не даём Mac уснуть, пока бот жив (на Linux caffeinate нет — пропускаем)
