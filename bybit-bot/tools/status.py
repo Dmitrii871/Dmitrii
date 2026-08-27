@@ -97,10 +97,12 @@ def _trades_from_log() -> dict:
     в памяти бота. Лог — единственный след, по нему хотя бы видно счёт.
     """
     out = {"entries": 0, "exits": 0, "maker": 0, "net": 0.0}
-    try:
-        lines = Path("bot.out").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return out
+    lines: list[str] = []
+    for name in ("bot.history.log", "bot.out"):
+        try:
+            lines += Path(name).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
     for line in lines:
         if "[БУМАГА] вход" in line:
             out["entries"] += 1

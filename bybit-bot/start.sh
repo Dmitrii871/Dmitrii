@@ -31,6 +31,10 @@ for f in *_journal.csv; do
     esac
 done
 
+# лог прежней сессии не выбрасываем: в нём след сделок, статус его читает
+if [ -s bot.out ]; then
+    cat bot.out >> bot.history.log
+fi
 : > bot.out
 nohup python3 -m bot.main --config config.yaml >> bot.out 2>&1 &
 PID=$!
