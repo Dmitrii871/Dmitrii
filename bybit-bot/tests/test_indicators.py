@@ -449,3 +449,86 @@ def test_bad_adx_thresholds_rejected():
         assert "adx_range_max" in str(exc)
     else:
         raise AssertionError("пересечение порогов должно отклоняться")
+
+
+# ------------------------------------------- выход по ставке мейкера
+def _pos(side="Buy", entry="2463", size="0.02"):
+    from decimal import Decimal
+    from bot.models import Position
+    return Position("ETHUSDT", side, Decimal(size), Decimal(entry),
+                    Decimal(0), Decimal(entry))
+
+
+def test_maker_exit_places_reduce_only_post_only():
+    strat = SignalStrategy({"exit_type": "maker_chase", "min_confluence": 2})
+    ctx = _ctx(DOWN, pos=_pos())
+    acts = strat.decide(ctx)
+    assert len(acts) == 1
+    a = acts[0]
+    assert a.kind == "limit" and a.post_only and a.reduce_only
+    assert a.side == "Sell", "лонг закрывается продажей"
+
+
+def test_maker_exit_does_not_go_deep_into_book():
+    """Заявка не должна уходить глубже ближнего края — иначе не исполнится."""
+    strat = SignalStrategy({"exit_type": "maker_chase", "take_profit_pct": 0.01})
+    ctx = _ctx(DOWN, pos=_pos())
+    a = strat.decide(ctx)[0]
+    assert a.price >= ctx.md.ask, "продажа держится на аске или выше"
+
+
+def test_adverse_move_forces_taker_exit():
+    """Движение против позиции сверх порога — выходим рынком, не торгуясь."""
+    strat = SignalStrategy({"exit_type": "maker_chase", "exit_panic_pct": 0.5})
+    ctx = _ctx(DOWN, pos=_pos(entry="2600"))      # цена ушла вниз от входа
+    acts = strat.decide(ctx)
+    assert [a.kind for a in acts] == ["close"]
+    assert "против позиции" in acts[0].reason
+
+
+def test_exit_ttl_forces_close():
+    strat = SignalStrategy({"exit_type": "maker_chase", "exit_ttl_bars": 0})
+    acts = strat.decide(_ctx(DOWN, pos=_pos()))
+    assert [a.kind for a in acts] == ["close"]
+    assert "срок удержания" in acts[0].reason
+
+
+def test_existing_exit_order_at_right_price_is_left_alone():
+    strat = SignalStrategy({"exit_type": "maker_chase", "take_profit_pct": 0.01})
+    ctx = _ctx(DOWN, pos=_pos())
+    target = strat.decide(ctx)[0].price
+    ctx2 = _ctx(DOWN, pos=_pos())
+    ctx2.open_orders = [{"orderId": "1", "reduceOnly": True, "price": str(target)}]
+    assert SignalStrategy({"exit_type": "maker_chase",
+                           "take_profit_pct": 0.01}).decide(ctx2) == []
+
+
+def test_stale_exit_order_is_cancelled_for_repricing():
+    strat = SignalStrategy({"exit_type": "maker_chase"})
+    ctx = _ctx(DOWN, pos=_pos())
+    ctx.open_orders = [{"orderId": "1", "reduceOnly": True, "price": "9999"}]
+    assert [a.kind for a in strat.decide(ctx)] == ["cancel_all"]
+
+
+def test_maker_chase_does_not_put_take_profit_on_exchange():
+    """Биржевой TP исполнился бы тейкером и убил бы всю выгоду режима."""
+    from decimal import Decimal
+    strat = SignalStrategy({"exit_type": "maker_chase"})
+    a = strat._entry("Buy", _ctx(DOWN), 2, {})
+    assert a.take_profit is None
+    assert a.stop_loss is not None, "биржевой стоп остаётся страховкой"
+
+
+def test_exchange_tpsl_mode_still_sets_both():
+    strat = SignalStrategy({"exit_type": "exchange_tpsl"})
+    a = strat._entry("Buy", _ctx(DOWN), 2, {})
+    assert a.take_profit is not None and a.stop_loss is not None
+
+
+def test_bad_exit_type_rejected():
+    try:
+        SignalStrategy({"exit_type": "магия"}).validate({"taker_bps": 5.5})
+    except ValueError as exc:
+        assert "exit_type" in str(exc)
+    else:
+        raise AssertionError("неизвестный exit_type должен отклоняться")

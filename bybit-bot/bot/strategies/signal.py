@@ -59,6 +59,15 @@ class SignalStrategy(Strategy):
         self.adx_range_max = float(cfg.get("adx_range_max", 20.0))
         self.adx_trend_min = float(cfg.get("adx_trend_min", 25.0))
         self.entry_ttl_seconds = int(cfg.get("entry_ttl_seconds", 90))
+        # exchange_tpsl — выход по TP/SL на бирже, всегда тейкер (5.5 bp)
+        # maker_chase  — выход лимиткой у края книги, мейкер (2 bp);
+        #   круг падает с 7.5 до 4 bp, и найденный край в 6.7 bp его перекрывает.
+        #   Цена ухода: лимитка может не исполниться, поэтому есть аварийный
+        #   выход тейкером по сроку и по движению против позиции.
+        self.exit_type = str(cfg.get("exit_type", "exchange_tpsl")).lower()
+        self.exit_ttl_bars = int(cfg.get("exit_ttl_bars", 12))
+        self.exit_panic_pct = Decimal(str(cfg.get("exit_panic_pct", 1.5))) / 100
+        self._pos_opened_bar = 0
         self._last_entry_bar = -10**9   # кулдаун не должен блокировать первый вход
         self._bars_seen = 0
         self._prev_bar_time = 0
@@ -71,6 +80,8 @@ class SignalStrategy(Strategy):
     def validate(self, fees: dict) -> None:
         if self.entry_type not in ("market", "post_only"):
             raise ValueError("entry_type должен быть 'market' или 'post_only'")
+        if self.exit_type not in ("exchange_tpsl", "maker_chase"):
+            raise ValueError("exit_type должен быть 'exchange_tpsl' или 'maker_chase'")
         if self.direction not in ("both", "long_only", "short_only"):
             raise ValueError("direction должен быть 'both', 'long_only' или 'short_only'")
         if self.mode not in ("reversion", "momentum", "auto"):
@@ -268,6 +279,13 @@ class SignalStrategy(Strategy):
 
         pos = ctx.position
 
+        # Выход лимиткой: держим reduce-only заявку у цели и переставляем её,
+        # пока не истечёт срок или цена не уйдёт против позиции слишком далеко.
+        if not pos.is_flat and self.exit_type == "maker_chase":
+            exit_act = self._manage_exit(ctx, pos)
+            if exit_act is not None:
+                return exit_act
+
         # В позиции: закрываем, если рынок развернулся против нас
         if not pos.is_flat:
             against = shorts if pos.side == "Buy" else longs
@@ -290,6 +308,43 @@ class SignalStrategy(Strategy):
         if allow_short and shorts >= self.min_confluence and shorts > longs:
             return [self._entry("Sell", ctx, shorts, snap)]
         return []
+
+    def _manage_exit(self, ctx: Context, pos) -> list[Action] | None:
+        """Ведение выхода лимиткой. None — вмешательство не требуется."""
+        held = self._bars_seen - self._pos_opened_bar
+        entry = pos.entry_price
+        last = ctx.md.last
+        if entry <= 0:
+            return None
+
+        # движение против позиции сверх порога — выходим тейкером, не торгуясь
+        adverse = (entry - last) / entry if pos.side == "Buy" else (last - entry) / entry
+        if adverse >= self.exit_panic_pct:
+            return [Action(kind="close",
+                           reason=f"движение против позиции {float(adverse)*100:.2f}%")]
+        if held >= self.exit_ttl_bars:
+            return [Action(kind="close", reason=f"срок удержания {held} баров истёк")]
+
+        # целевая цена выхода и сторона закрытия
+        side = "Sell" if pos.side == "Buy" else "Buy"
+        target = entry * (1 + self.tp_pct) if pos.side == "Buy" else entry * (1 - self.tp_pct)
+        # не даём заявке уйти вглубь книги: держим её у ближнего края
+        touch = ctx.md.ask if side == "Sell" else ctx.md.bid
+        price = max(target, touch) if side == "Sell" else min(target, touch)
+
+        existing = [o for o in ctx.open_orders if o.get("reduceOnly")]
+        if existing:
+            try:
+                cur = Decimal(str(existing[0].get("price", "0")))
+            except Exception:  # noqa: BLE001
+                cur = Decimal(0)
+            if cur > 0 and abs(price - cur) / price < Decimal("0.0005"):
+                return []              # заявка уже там, где надо
+            return [Action(kind="cancel_all", reason="перестановка выходной лимитки")]
+
+        return [Action(kind="limit", side=side, qty=pos.size, price=price,
+                       post_only=True, reduce_only=True,
+                       reason=f"выход мейкером, держим {held} баров")]
 
     def _entry(self, side: str, ctx: Context, votes: int, snap: dict) -> Action:
         self._last_entry_bar = self._bars_seen
@@ -319,10 +374,14 @@ class SignalStrategy(Strategy):
                     log.info("Тейк-профит подтянут к уровню плана: %s вместо %s",
                              level, round(float(tp), 2))
                     tp = level
+        self._pos_opened_bar = self._bars_seen
+        # В режиме maker_chase выход ведём сами лимитками; биржевой стоп
+        # оставляем как страховку на случай падения бота.
+        on_exchange_tp = None if self.exit_type == "maker_chase" else tp
         return Action(
             kind=kind, side=side, qty=qty,
             price=price if kind == "limit" else None,
             post_only=post_only,
-            take_profit=tp, stop_loss=sl,
+            take_profit=on_exchange_tp, stop_loss=sl,
             reason=f"{votes} индикатора за {side} ({self.entry_type}): {snap}",
         )
