@@ -59,6 +59,12 @@ def features_for(closes, highs, lows, vols) -> dict[str, list[float | None]]:
     }
 
 
+# Признаки, измеряющие ВЕЛИЧИНУ движения, а не его направление.
+# У них знаковый IC подозрителен: если за период рынок в среднем рос,
+# сила тренда совпадёт с ростом просто потому, что рост и был.
+MAGNITUDE_FEATURES = {"ADX 14", "объём к среднему", "размах бара"}
+
+
 def ic_for_symbol(http, symbol: str, interval: str, bars: int,
                   horizons: list[int]) -> dict[tuple[str, int], float] | None:
     rows = http.get_kline(category="linear", symbol=symbol,
@@ -75,13 +81,20 @@ def ic_for_symbol(http, symbol: str, interval: str, bars: int,
     out: dict[tuple[str, int], float] = {}
     for name, series in features_for(closes, highs, lows, vols).items():
         for h in horizons:
-            xs, ys = [], []
+            xs, ys, mags = [], [], []
             for i in range(n - h):
                 if series[i] is None:
                     continue
+                r = closes[i + h] / closes[i] - 1
                 xs.append(series[i])
-                ys.append(closes[i + h] / closes[i] - 1)
+                ys.append(r)
+                mags.append(abs(r))
             out[(name, h)] = spearman(xs, ys) if len(xs) >= 50 else 0.0
+            if name in MAGNITUDE_FEATURES and len(xs) >= 50:
+                out[(name + " |модуль|", h)] = spearman(xs, mags)
+    # снос рынка за период: если он велик, знаковый IC признаков величины
+    # отражает его, а не связь
+    out[("__снос__", 0)] = (closes[-1] / closes[0] - 1)
     return out
 
 
@@ -114,7 +127,19 @@ def main() -> int:
         print("\nНужно минимум 4 символа для выводов.")
         return 1
 
-    keys = sorted({k for d in per_symbol.values() for k in d},
+    drifts = [d[("__снос__", 0)] for d in per_symbol.values() if ("__снос__", 0) in d]
+    mean_drift = statistics.mean(drifts) if drifts else 0.0
+    same_way = sum(1 for x in drifts if x > 0)
+    print(f"\nСнос рынка за период: в среднем {mean_drift*100:+.1f}%, "
+          f"вверх у {same_way} из {len(drifts)} инструментов")
+    if abs(mean_drift) > 0.03 and max(same_way, len(drifts) - same_way) >= len(drifts) * 0.8:
+        print("! Рынок за период двигался преимущественно в одну сторону.")
+        print("  У признаков ВЕЛИЧИНЫ движения (ADX, объём, размах) знаковый IC")
+        print("  будет отражать этот снос, а не предсказательную связь.")
+        print("  Смотрите на их строки «|модуль|»: если связь с модулем сильнее,")
+        print("  признак предсказывает размах, а не направление.")
+
+    keys = sorted({k for d in per_symbol.values() for k in d if k[0] != "__снос__"},
                   key=lambda k: (k[0], k[1]))
     print("\n" + "=" * 78)
     print(f"  УСТОЙЧИВОСТЬ ПРИЗНАКОВ НА {n_sym} ИНСТРУМЕНТАХ, {args.interval}m")
@@ -144,7 +169,19 @@ def main() -> int:
     print(f"  Порог с поправкой на {len(keys)} проверок: p < {0.05/len(keys):.4f}")
     print("  знаков — сколько инструментов сошлись в направлении связи\n")
 
-    solid = [f for f in findings if f[6] == "УСТОЙЧИВ"]
+    # Признак величины считается находкой, только если знаковая связь
+    # сильнее связи с модулем — иначе он про размах, а не про направление
+    mods = {(n.replace(" |модуль|", ""), h): ic
+            for _, ic, n, h, _, _, _ in findings if "|модуль|" in n}
+    solid = []
+    for f in findings:
+        p_, ic, name, h, agree, tot, verdict = f
+        if verdict != "УСТОЙЧИВ" or "|модуль|" in name:
+            continue
+        if name in MAGNITUDE_FEATURES and (name, h) in mods:
+            if abs(mods[(name, h)]) >= abs(ic):
+                continue          # предсказывает размах, а не направление
+        solid.append(f)
     print("  ВЫВОД")
     if solid:
         solid.sort()

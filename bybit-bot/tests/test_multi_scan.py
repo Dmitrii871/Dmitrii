@@ -71,3 +71,41 @@ def test_first_bars_are_none_not_zero():
                          [c - 0.5 for c in closes], [1000.0] * 200)
     assert feats["RSI 14"][0] is None
     assert feats["доходность прошлого бара"][0] is None
+
+
+# ------------------------------- подмена направления размахом и сносом
+def test_magnitude_feature_shows_fake_signed_ic():
+    """Признак, не знающий направления, всё равно даёт знаковый IC.
+
+    Ровно эта ловушка объясняет положительный IC у ADX: индикатор меряет
+    силу тренда, направления у него нет, но при сносе рынка знаковая
+    корреляция возникает сама собой. Отличить можно по связи с модулем:
+    если она заметно сильнее, признак про размах, а не про направление.
+    """
+    from tools.feature_scan import spearman
+    rng = random.Random(31)
+    n = 900
+    feature = [abs(rng.gauss(0, 1)) for _ in range(n)]
+    rets = [rng.choice([-1, 1]) * v * 20 / 10_000 for v in feature]
+
+    signed = abs(spearman(feature, rets))
+    magnitude = abs(spearman(feature, [abs(r) for r in rets]))
+    assert magnitude > 0.9, "связь с размахом обязана быть почти полной"
+    assert magnitude > signed * 5, "по этому разрыву и распознаётся подмена"
+
+
+def test_directional_feature_survives_the_check():
+    """У настоящего направленного признака знаковая связь сильнее модульной."""
+    from tools.feature_scan import spearman
+    rng = random.Random(41)
+    n = 900
+    feature = [rng.gauss(0, 1) for _ in range(n)]
+    rets = [-v * 20 / 10_000 + rng.gauss(0, 5 / 10_000) for v in feature]
+    signed = abs(spearman(feature, rets))
+    magnitude = abs(spearman(feature, [abs(r) for r in rets]))
+    assert signed > magnitude, "направленная связь обязана быть сильнее модульной"
+
+
+def test_magnitude_features_are_listed_for_the_check():
+    from tools.multi_scan import MAGNITUDE_FEATURES
+    assert {"ADX 14", "объём к среднему", "размах бара"} <= MAGNITUDE_FEATURES
