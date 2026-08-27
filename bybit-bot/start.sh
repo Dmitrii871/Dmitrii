@@ -49,8 +49,10 @@ while [ "$i" -lt 60 ]; do
     if ! kill -0 "$PID" 2>/dev/null; then
         break   # процесс умер — статус покажет хвост bot.out с причиной
     fi
-    # появилась хоть одна строка данных в любом журнале — цикл прошёл
-    if [ -n "$(find . -maxdepth 1 -name '*_journal.csv' -size +200c 2>/dev/null | head -1)" ]; then
+    # цикл прошёл, когда журнал обновил ИМЕННО новый процесс: bot.pid
+    # создан при этом запуске, значит файлы новее него — свежие.
+    # Сравнение с размером ловило строки прежнего экземпляра.
+    if [ -n "$(find . -maxdepth 1 -name '*_journal.csv' -newer bot.pid 2>/dev/null | head -1)" ]; then
         break
     fi
     i=$((i+2))
