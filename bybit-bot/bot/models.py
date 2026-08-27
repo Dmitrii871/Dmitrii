@@ -57,6 +57,8 @@ class MarketData:
     ask: Decimal
     last: Decimal
     closes: list[float] = field(default_factory=list)
+    highs: list[float] = field(default_factory=list)
+    lows: list[float] = field(default_factory=list)
     bar_time: int = 0     # время открытия последней закрытой свечи, мс
 
     @property

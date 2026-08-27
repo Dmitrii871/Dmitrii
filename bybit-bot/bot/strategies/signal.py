@@ -11,7 +11,7 @@ import logging
 import time
 from decimal import Decimal
 
-from ..indicators import bollinger_pct_b, macd, rsi
+from ..indicators import adx, bollinger_pct_b, macd, rsi
 from ..models import Action
 from ..plan import TradingPlan
 from .base import Context, Strategy
@@ -52,11 +52,18 @@ class SignalStrategy(Strategy):
         # Что из этого работает, решает оптимизатор на ваших данных,
         # а не убеждения автора кода.
         self.mode = str(cfg.get("mode", "reversion")).lower()
+        # Режим auto выбирает логику по силе тренда: ADX ниже нижнего порога —
+        # боковик, работает возврат к среднему; выше верхнего — тренд, работает
+        # движение по нему; между порогами режим неясен и сделок нет.
+        self.adx_period = int(cfg.get("adx_period", 14))
+        self.adx_range_max = float(cfg.get("adx_range_max", 20.0))
+        self.adx_trend_min = float(cfg.get("adx_trend_min", 25.0))
         self.entry_ttl_seconds = int(cfg.get("entry_ttl_seconds", 90))
         self._last_entry_bar = -10**9   # кулдаун не должен блокировать первый вход
         self._bars_seen = 0
         self._prev_bar_time = 0
         self._pending_since: float | None = None
+        self.last_snapshot: dict = {}     # для журнала и строки состояния
 
     def warmup_bars(self) -> int:
         return max(self.macd_params[1] + self.macd_params[2], self.bb_period, self.rsi_period) + 30
@@ -66,8 +73,10 @@ class SignalStrategy(Strategy):
             raise ValueError("entry_type должен быть 'market' или 'post_only'")
         if self.direction not in ("both", "long_only", "short_only"):
             raise ValueError("direction должен быть 'both', 'long_only' или 'short_only'")
-        if self.mode not in ("reversion", "momentum"):
-            raise ValueError("mode должен быть 'reversion' или 'momentum'")
+        if self.mode not in ("reversion", "momentum", "auto"):
+            raise ValueError("mode должен быть 'reversion', 'momentum' или 'auto'")
+        if self.adx_range_max >= self.adx_trend_min:
+            raise ValueError("adx_range_max должен быть меньше adx_trend_min")
         taker = float(fees.get("taker_bps", 5.5))
         maker = float(fees.get("maker_bps", 2.0))
         # вход мейкером + выход по TP/SL тейкером; при market обе стороны тейкер
@@ -90,7 +99,25 @@ class SignalStrategy(Strategy):
             raise ValueError("take_profit_pct и stop_loss_pct должны быть > 0")
 
     # ------------------------------------------------------------- голосование
-    def votes(self, closes: list[float]) -> tuple[int, int, dict]:
+    def regime(self, highs: list[float], lows: list[float],
+               closes: list[float]) -> tuple[str, float | None]:
+        """Какой режим рынка сейчас: 'reversion', 'momentum' или 'unclear'."""
+        if self.mode != "auto":
+            return self.mode, None
+        if not highs or not lows:
+            return "unclear", None
+        a, _, _ = adx(highs, lows, closes, self.adx_period)
+        if not a:
+            return "unclear", None
+        value = a[-1]
+        if value <= self.adx_range_max:
+            return "reversion", value
+        if value >= self.adx_trend_min:
+            return "momentum", value
+        return "unclear", value
+
+    def votes(self, closes: list[float], highs: list[float] | None = None,
+              lows: list[float] | None = None) -> tuple[int, int, dict]:
         """Возвращает (голосов в лонг, голосов в шорт, значения индикаторов)."""
         longs = shorts = 0
         snapshot: dict = {}
@@ -120,11 +147,18 @@ class SignalStrategy(Strategy):
             elif b[-1] >= self.bb_sell:
                 shorts += 1
 
-        if self.mode == "momentum":
+        mode, adx_val = self.regime(highs or [], lows or [], closes)
+        if adx_val is not None:
+            snapshot["adx"] = round(adx_val, 1)
+            snapshot["режим"] = mode
+        if mode == "unclear":
+            return 0, 0, snapshot          # сила тренда между порогами — не торгуем
+        if mode == "momentum":
             longs, shorts = shorts, longs
         return longs, shorts, snapshot
 
-    def votes_series(self, closes: list[float]) -> list[tuple[int, int]]:
+    def votes_series(self, closes: list[float], highs: list[float] | None = None,
+                     lows: list[float] | None = None) -> list[tuple[int, int]]:
         """Голоса для КАЖДОГО бара за один проход.
 
         Индикаторы причинные — значение на баре i зависит только от прошлого,
@@ -141,6 +175,23 @@ class SignalStrategy(Strategy):
         h_off = n - len(hist)
         b = bollinger_pct_b(closes, self.bb_period, self.bb_mult)
         b_off = n - len(b)
+
+        # Режим на каждом баре: ADX причинный, считается один раз по всей истории
+        modes: list[str] = [self.mode] * n
+        if self.mode == "auto":
+            if highs and lows:
+                a, _, _ = adx(highs, lows, closes, self.adx_period)
+                a_off = n - len(a)
+                for i in range(n):
+                    j = i - a_off
+                    if 0 <= j < len(a):
+                        v = a[j]
+                        modes[i] = ("reversion" if v <= self.adx_range_max else
+                                    "momentum" if v >= self.adx_trend_min else "unclear")
+                    else:
+                        modes[i] = "unclear"
+            else:
+                modes = ["unclear"] * n
 
         for i in range(n):
             longs = shorts = 0
@@ -162,7 +213,13 @@ class SignalStrategy(Strategy):
                     longs += 1
                 elif b[m] >= self.bb_sell:
                     shorts += 1
-            out[i] = (shorts, longs) if self.mode == "momentum" else (longs, shorts)
+            m = modes[i]
+            if m == "unclear":
+                out[i] = (0, 0)
+            elif m == "momentum":
+                out[i] = (shorts, longs)
+            else:
+                out[i] = (longs, shorts)
         return out
 
     # ------------------------------------------------------------------ решение
@@ -200,7 +257,8 @@ class SignalStrategy(Strategy):
         else:
             return []
 
-        longs, shorts, snap = self.votes(closes)
+        longs, shorts, snap = self.votes(closes, ctx.md.highs, ctx.md.lows)
+        self.last_snapshot = snap
         plan_note = ""
         if self.plan is not None:
             pl, ps, plan_note = self.plan.extra_votes(ctx.md.last)

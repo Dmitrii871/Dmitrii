@@ -86,3 +86,79 @@ def bollinger_pct_b(
         upper, lower = mean + mult * sd, mean - mult * sd
         out.append(0.5 if upper == lower else (closes[i] - lower) / (upper - lower))
     return out
+
+
+def atr(highs: list[float], lows: list[float], closes: list[float],
+        period: int = 14) -> list[float]:
+    """Средний истинный диапазон по Уайлдеру — мера волатильности.
+
+    Нужен и сам по себе (ширина стопа), и как знаменатель в ADX.
+    """
+    if len(closes) < period + 1 or len(highs) != len(closes) or len(lows) != len(closes):
+        return []
+    trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+           for i in range(1, len(closes))]
+    if len(trs) < period:
+        return []
+    acc = sum(trs[:period]) / period
+    out = [acc]
+    for tr in trs[period:]:
+        acc = (acc * (period - 1) + tr) / period
+        out.append(acc)
+    return out
+
+
+def adx(highs: list[float], lows: list[float], closes: list[float],
+        period: int = 14) -> tuple[list[float], list[float], list[float]]:
+    """ADX и направленные индикаторы: (ADX, +DI, -DI).
+
+    ADX меряет СИЛУ тренда, а не его направление. Именно это нам и нужно:
+    ниже 20 рынок в боковике и работает возврат к среднему, выше 25 идёт
+    тренд и работает движение по нему. Прогон одного режима всегда даёт
+    убыток в той половине времени, когда режим не тот.
+    """
+    n = len(closes)
+    if n < 2 * period + 1 or len(highs) != n or len(lows) != n:
+        return [], [], []
+
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    trs: list[float] = []
+    for i in range(1, n):
+        up = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+        trs.append(max(highs[i] - lows[i],
+                       abs(highs[i] - closes[i - 1]),
+                       abs(lows[i] - closes[i - 1])))
+
+    def wilder(values: list[float]) -> list[float]:
+        acc = sum(values[:period])
+        out = [acc]
+        for v in values[period:]:
+            acc = acc - acc / period + v
+            out.append(acc)
+        return out
+
+    tr_s, pdm_s, mdm_s = wilder(trs), wilder(plus_dm), wilder(minus_dm)
+    plus_di, minus_di, dx = [], [], []
+    for i in range(len(tr_s)):
+        if tr_s[i] <= 0:
+            plus_di.append(0.0); minus_di.append(0.0); dx.append(0.0)
+            continue
+        p_di = 100.0 * pdm_s[i] / tr_s[i]
+        m_di = 100.0 * mdm_s[i] / tr_s[i]
+        plus_di.append(p_di)
+        minus_di.append(m_di)
+        total = p_di + m_di
+        dx.append(100.0 * abs(p_di - m_di) / total if total > 0 else 0.0)
+
+    if len(dx) < period:
+        return [], plus_di, minus_di
+    acc = sum(dx[:period]) / period
+    adx_out = [acc]
+    for v in dx[period:]:
+        acc = (acc * (period - 1) + v) / period
+        adx_out.append(acc)
+    return adx_out, plus_di, minus_di

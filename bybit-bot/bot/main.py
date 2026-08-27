@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from decimal import Decimal
 import signal
 import sys
 import time
@@ -15,6 +16,7 @@ from dotenv import load_dotenv
 
 from .exchange import Exchange, FatalExchangeError, StaleDataError
 from .models import Action, RiskHalt, RiskReject
+from .paper import PaperTrader
 from .plan import TradingPlan
 from .risk import RiskManager
 from .strategies import build
@@ -91,6 +93,18 @@ def run(cfg: dict, dry_run: bool) -> int:
     tick = 0
     stale_streak = 0
     start_equity: float | None = None
+    last_bar = 0
+
+    # В сухом прогоне ордера не уходят, но позиция ведётся на бумаге:
+    # так видно не только «бот не падает», но и «бот зарабатывал бы».
+    paper = PaperTrader(
+        maker_bps=float(cfg.get("fees", {}).get("maker_bps", 2.0)),
+        taker_bps=float(cfg.get("fees", {}).get("taker_bps", 5.5)),
+        journal_path=cfg.get("journal_file"),
+    ) if dry_run else None
+    if paper:
+        log.info("Бумажная торговля включена%s",
+                 f", журнал решений: {cfg['journal_file']}" if cfg.get("journal_file") else "")
     log.info("Стратегия '%s' запущена. Ctrl+C или файл %s для остановки.",
              name, cfg["risk"].get("kill_switch_file", "./STOP"))
 
@@ -122,15 +136,33 @@ def run(cfg: dict, dry_run: bool) -> int:
                     if not pos.is_flat else "нет позиции"
                 )
                 delta = float(account.equity) - start_equity
+                snap = getattr(strategy, "last_snapshot", {})
+                regime = f" | режим {snap['режим']} (ADX {snap.get('adx')})" \
+                    if snap.get("режим") else ""
                 log.info(
                     "СТАТУС | цена %s | %s | капитал %.4f USDT (%+.4f за сессию) | "
-                    "ордеров %d | спред %.1f bp",
+                    "ордеров %d | спред %.1f bp%s",
                     ctx.md.last, pos_txt, float(account.equity), delta,
-                    len(ctx.open_orders), ctx.md.spread_bps,
+                    len(ctx.open_orders), ctx.md.spread_bps, regime,
                 )
+                if paper:
+                    paper.log_summary()
 
             stale_streak = 0
-            for action in strategy.decide(ctx):
+
+            # Бумажную позицию проверяем на новой свече: не выбило ли TP/SL
+            if paper and ctx.md.bar_time != last_bar and ctx.md.highs and ctx.md.lows:
+                last_bar = ctx.md.bar_time
+                paper.on_price(Decimal(str(ctx.md.highs[-1])), Decimal(str(ctx.md.lows[-1])))
+
+            decided = strategy.decide(ctx)
+            if paper:
+                snap = getattr(strategy, "last_snapshot", {})
+                paper.record(ctx.md.last, snap, decided)
+                for a in decided:
+                    paper.on_action(a, ctx.md.last)
+
+            for action in decided:
                 try:
                     risk.validate(action, ctx.position, ctx.account, ctx.md.mid)
                 except RiskReject as exc:
@@ -169,6 +201,11 @@ def run(cfg: dict, dry_run: bool) -> int:
 
         time.sleep(poll)
 
+    if paper:
+        log.info("=" * 60)
+        log.info("ИТОГ БУМАЖНОЙ ТОРГОВЛИ ЗА СЕССИЮ")
+        paper.log_summary()
+        log.info("=" * 60)
     log.info("Остановлен штатно.")
     return 0
 

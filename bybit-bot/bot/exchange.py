@@ -223,6 +223,8 @@ class Exchange:
             ask=_d(tick["ask1Price"]),
             last=_d(tick["lastPrice"]),
             closes=[float(r[4]) for r in rows],
+            highs=[float(r[2]) for r in rows],
+            lows=[float(r[3]) for r in rows],
             bar_time=int(rows[-1][0]),
         )
         self._assert_fresh(md, interval)

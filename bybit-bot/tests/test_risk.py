@@ -141,7 +141,7 @@ def test_stale_data_detected():
     ex = Exchange.__new__(Exchange)          # без сети
     old_bar = int((_t.time() - 3 * 3600) * 1000)
     md = MarketData("ETHUSDT", Decimal("2463"), Decimal("2464"),
-                    Decimal("2463"), [1.0], old_bar)
+                    Decimal("2463"), [1.0], bar_time=old_bar)
     try:
         ex._assert_fresh(md, "60")
     except StaleDataError as exc:
@@ -158,7 +158,7 @@ def test_fresh_data_accepted():
     ex = Exchange.__new__(Exchange)
     recent = int((_t.time() - 600) * 1000)   # закрылась 10 минут назад
     ex._assert_fresh(MarketData("ETHUSDT", Decimal("2463"), Decimal("2464"),
-                                Decimal("2463"), [1.0], recent), "60")
+                                Decimal("2463"), [1.0], bar_time=recent), "60")
 
 
 def test_interval_ms_parsing():

@@ -149,13 +149,17 @@ def test_maker_rejects_spread_below_fee():
         raise AssertionError("должна была быть ошибка: спред меньше комиссии")
 
 
-def _ctx(closes, bar=1, pos=None):
+def _ctx(closes, bar=1, pos=None, highs=None, lows=None):
     from decimal import Decimal
     from bot.models import Account, Instrument, MarketData, Position
     from bot.strategies.base import Context
+    # без максимумов и минимумов ADX не считается; для режимов reversion
+    # и momentum они не нужны, но пусть будут реалистичными
+    highs = highs if highs is not None else [c * 1.002 for c in closes]
+    lows = lows if lows is not None else [c * 0.998 for c in closes]
     return Context(
         md=MarketData("ETHUSDT", Decimal("2463.28"), Decimal("2463.30"),
-                      Decimal("2463.29"), closes, bar),
+                      Decimal("2463.29"), closes, highs, lows, bar),
         position=pos or Position("ETHUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
         account=Account(Decimal(40), Decimal(23)),
         instrument=Instrument("ETHUSDT", Decimal("0.01"), Decimal("0.01"),
@@ -345,3 +349,103 @@ def test_maker_quotes_when_spread_is_wide_enough():
     )
     sides = [a.side for a in strat.decide(ctx) if a.kind == "limit"]
     assert sorted(sides) == ["Buy", "Sell"]
+
+
+# ------------------------------------------- выбор режима по силе тренда
+def test_adx_high_in_trend_low_in_range():
+    """ADX меряет силу тренда, а не направление."""
+    import math
+    from bot.indicators import adx
+    n = 200
+    trend_h = [100 + i for i in range(n)]
+    trend_l = [99 + i for i in range(n)]
+    trend_c = [99.5 + i for i in range(n)]
+    a_trend, plus, minus = adx(trend_h, trend_l, trend_c)
+    assert a_trend[-1] > 50, "в чистом тренде ADX обязан быть высоким"
+    assert plus[-1] > minus[-1], "рост -> +DI выше -DI"
+
+    rng_c = [100 + 2 * math.sin(i / 3) for i in range(n)]
+    rng_h = [c + 1 for c in rng_c]
+    rng_l = [c - 1 for c in rng_c]
+    a_range, _, _ = adx(rng_h, rng_l, rng_c)
+    assert a_range[-1] < 30, "в боковике ADX обязан быть низким"
+    assert a_trend[-1] > a_range[-1] * 2
+
+
+def test_adx_needs_enough_bars():
+    from bot.indicators import adx
+    assert adx([1.0] * 5, [1.0] * 5, [1.0] * 5) == ([], [], [])
+
+
+def test_atr_matches_range_of_constant_bars():
+    from bot.indicators import atr
+    highs = [101.0] * 50
+    lows = [99.0] * 50
+    closes = [100.0] * 50
+    assert abs(atr(highs, lows, closes)[-1] - 2.0) < 1e-9
+
+
+def test_auto_mode_picks_reversion_in_range():
+    """Настоящий боковик — это шум без накопления направления.
+
+    Гладкая синусоида боковиком НЕ является: внутри каждой полуволны
+    идёт устойчивое движение, и ADX справедливо видит там тренд.
+    """
+    import random
+    rng = random.Random(11)
+    closes = [100 + rng.gauss(0, 1.0) for _ in range(250)]
+    highs = [c + abs(rng.gauss(0, 0.4)) for c in closes]
+    lows = [c - abs(rng.gauss(0, 0.4)) for c in closes]
+    mode, val = SignalStrategy({"mode": "auto"}).regime(highs, lows, closes)
+    assert mode == "reversion", f"шум вокруг уровня — это боковик (ADX={val})"
+
+
+def test_smooth_wave_is_not_a_range():
+    """Защита от наивной модели боковика в будущих тестах."""
+    import math
+    closes = [100 + 2 * math.sin(i / 6) for i in range(250)]
+    highs = [c + 1 for c in closes]
+    lows = [c - 1 for c in closes]
+    mode, val = SignalStrategy({"mode": "auto"}).regime(highs, lows, closes)
+    assert mode == "momentum", f"в плавной волне ADX видит тренд, и он прав (ADX={val})"
+
+
+def test_auto_mode_picks_momentum_in_trend():
+    closes = [99.5 + i for i in range(200)]
+    highs = [100 + i for i in range(200)]
+    lows = [99 + i for i in range(200)]
+    mode, val = SignalStrategy({"mode": "auto"}).regime(highs, lows, closes)
+    assert mode == "momentum", f"тренд должен давать движение по нему (ADX={val})"
+
+
+def test_auto_mode_stays_out_between_thresholds():
+    """Между порогами режим неясен — сделок быть не должно."""
+    strat = SignalStrategy({"mode": "auto", "adx_range_max": 0.0, "adx_trend_min": 999.0})
+    closes = [99.5 + i for i in range(200)]
+    highs = [100 + i for i in range(200)]
+    lows = [99 + i for i in range(200)]
+    assert strat.regime(highs, lows, closes)[0] == "unclear"
+    assert strat.votes(closes, highs, lows)[:2] == (0, 0)
+
+
+def test_auto_mode_batch_matches_per_bar():
+    """Ускоренный расчёт обязан повторять побарный и в режиме auto."""
+    import math
+    closes = [100 + 9 * math.sin(i / 6) + i * 0.05 for i in range(300)]
+    highs = [c + 0.8 for c in closes]
+    lows = [c - 0.8 for c in closes]
+    strat = SignalStrategy({"mode": "auto"})
+    batch = strat.votes_series(closes, highs, lows)
+    for i in range(strat.warmup_bars(), len(closes)):
+        per_bar = strat.votes(closes[: i + 1], highs[: i + 1], lows[: i + 1])[:2]
+        assert batch[i] == per_bar, f"расхождение на баре {i}: {batch[i]} != {per_bar}"
+
+
+def test_bad_adx_thresholds_rejected():
+    try:
+        SignalStrategy({"mode": "auto", "adx_range_max": 30, "adx_trend_min": 20}).validate(
+            {"taker_bps": 5.5})
+    except ValueError as exc:
+        assert "adx_range_max" in str(exc)
+    else:
+        raise AssertionError("пересечение порогов должно отклоняться")

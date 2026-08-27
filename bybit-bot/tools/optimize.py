@@ -44,7 +44,7 @@ def main() -> int:
     ap.add_argument("--interval", default="60")
     ap.add_argument("--bars", type=int, default=10_000)
     ap.add_argument("--csv")
-    ap.add_argument("--mode", choices=["reversion", "momentum", "both"],
+    ap.add_argument("--mode", choices=["reversion", "momentum", "auto", "both", "all"],
                     default="reversion",
                     help="reversion — покупать перепроданность; momentum — покупать силу")
     ap.add_argument("--notional", type=float, default=25.0)
@@ -68,7 +68,9 @@ def main() -> int:
             if tp <= sl:
                 continue                      # тейк не больше стопа — бессмысленно
             for conf in CONFLUENCE_GRID:
-              for mode in (("reversion", "momentum") if args.mode == "both" else (args.mode,)):
+              for mode in (("reversion", "momentum") if args.mode == "both" else
+                           ("reversion", "momentum", "auto") if args.mode == "all" else
+                           (args.mode,)):
                 tr = run(train, tp, sl, conf, mode, args.fee_bps, args.notional)
                 if tr["trades"] < args.min_trades:
                     continue

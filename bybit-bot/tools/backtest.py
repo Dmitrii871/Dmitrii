@@ -106,7 +106,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     # Голоса считаются один раз по всей истории: индикаторы причинные,
     # результат идентичен побарному пересчёту (см. test_votes_series_matches_per_bar),
     # но время падает с O(n^2) до O(n).
-    all_votes = strat.votes_series(closes)
+    all_votes = strat.votes_series(closes, highs, lows)
 
     for i in range(warm, len(closes)):
         # 1) сначала проверяем, не выбило ли открытую позицию на этой свече
@@ -177,7 +177,7 @@ def main() -> int:
     ap.add_argument("--symbol", default="ETHUSDT")
     ap.add_argument("--interval", default="30")
     ap.add_argument("--bars", type=int, default=1000)
-    ap.add_argument("--mode", choices=["reversion", "momentum", "both"],
+    ap.add_argument("--mode", choices=["reversion", "momentum", "auto", "both", "all"],
                     default="reversion",
                     help="reversion — покупать перепроданность; momentum — покупать силу")
     ap.add_argument("--notional", type=float, default=25.0, help="размер сделки, USDT")
@@ -197,7 +197,7 @@ def main() -> int:
         "stop_loss_pct": args.sl,
         "min_confluence": args.confluence,
         "order_notional_usdt": args.notional,
-        "mode": args.mode if args.mode != "both" else "reversion",
+        "mode": args.mode if args.mode not in ("both", "all") else "reversion",
     }
     if args.demo:
         rows = synthetic_klines(args.bars, seed=args.seed)
