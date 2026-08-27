@@ -75,3 +75,48 @@ def test_align_right_pads_left_with_none():
 
 def test_align_right_handles_empty_series():
     assert align_right([], 3) == [None, None, None]
+
+
+# ---------------------------------------- выход по времени вместо стопа
+def test_timed_exit_closes_position():
+    """Позиция обязана закрыться по сроку, даже если TP и SL не задеты."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from tools.backtest import backtest, synthetic_klines
+
+    rows = synthetic_klines(2000, vol_bps=20)
+    cfg = {"take_profit_pct": 50.0, "stop_loss_pct": 0.0,   # уровни недостижимы
+           "min_confluence": 2, "order_notional_usdt": 25, "hold_bars": 6}
+    r = backtest(rows, cfg, 3.75, 25.0)
+    assert r["trades"] > 0, "без выхода по времени сделок бы не было вовсе"
+    assert r["timed_exit_share"] > 0.95, "почти все выходы должны быть по сроку"
+
+
+def test_no_stop_means_stop_never_triggers():
+    from tools.backtest import backtest, synthetic_klines
+    rows = synthetic_klines(1500, vol_bps=60)
+    common = {"take_profit_pct": 1.3, "min_confluence": 2,
+              "order_notional_usdt": 25, "hold_bars": 12}
+    with_stop = backtest(rows, {**common, "stop_loss_pct": 0.5}, 3.75, 25.0)
+    no_stop = backtest(rows, {**common, "stop_loss_pct": 0.0}, 3.75, 25.0)
+    assert no_stop["timed_exit_share"] > with_stop["timed_exit_share"], \
+        "без стопа больше выходов должно приходиться на срок"
+
+
+def test_removing_stop_is_not_free_on_random_walk():
+    """Контроль: без настоящего возврата к среднему снятие стопа не помогает.
+
+    На данных со встроенным возвратом снятие стопа резко улучшает результат,
+    и на этом легко обмануться. На случайном блуждании выигрыша нет,
+    а просадка растёт — это и есть цена приёма.
+    """
+    from tools.backtest import backtest, synthetic_klines
+    rows = synthetic_klines(4000, vol_bps=59)
+    common = {"take_profit_pct": 1.3, "min_confluence": 2,
+              "order_notional_usdt": 25, "mode": "reversion"}
+    with_stop = backtest(rows, {**common, "stop_loss_pct": 0.9, "hold_bars": 0}, 3.75, 25.0)
+    no_stop = backtest(rows, {**common, "stop_loss_pct": 0.0, "hold_bars": 24}, 3.75, 25.0)
+    assert no_stop["max_drawdown"] > with_stop["max_drawdown"], \
+        "снятие стопа обязано увеличивать просадку на данных без возврата"
+    assert no_stop["profit_factor"] < 1.0, "преимущества из ниоткуда не берётся"

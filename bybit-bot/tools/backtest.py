@@ -92,6 +92,12 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
         raise SystemExit(f"Мало данных: нужно больше {warm} свечей, есть {len(closes)}")
 
     tp_pct, sl_pct = float(strat.tp_pct), float(strat.sl_pct)
+    # Выход по времени: связь признака с доходностью живёт на фиксированном
+    # горизонте, а стоп-лосс — выход по ПУТИ цены. Если стоп уже обычного
+    # колебания на этом горизонте, позицию выбивает шумом до того, как
+    # закономерность отработает. 0 — выход по времени выключен.
+    hold_bars = int(cfg.get("hold_bars", 0))
+    use_stop = sl_pct > 0
     fee = fee_bps / 10_000
 
     equity = 0.0
@@ -101,7 +107,9 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     ambiguous = 0      # свечи, где задеты И тейк, И стоп: исход выбрало правило
     pos_side: str | None = None
     entry = 0.0
+    entry_bar = 0
     last_entry_bar = -10**9
+    timed_exits = 0
 
     # Голоса считаются один раз по всей истории: индикаторы причинные,
     # результат идентичен побарному пересчёту (см. test_votes_series_matches_per_bar),
@@ -113,16 +121,22 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
         if pos_side is not None:
             if pos_side == "Buy":
                 tp, sl = entry * (1 + tp_pct), entry * (1 - sl_pct)
-                hit_sl, hit_tp = lows[i] <= sl, highs[i] >= tp
+                hit_sl = use_stop and lows[i] <= sl
+                hit_tp = highs[i] >= tp
             else:
                 tp, sl = entry * (1 - tp_pct), entry * (1 + sl_pct)
-                hit_sl, hit_tp = highs[i] >= sl, lows[i] <= tp
+                hit_sl = use_stop and highs[i] >= sl
+                hit_tp = lows[i] <= tp
             # консервативно: если свеча задела оба уровня, считаем стоп.
             # Доля таких случаев отслеживается: если она велика, результат
             # определяется этим правилом, а не рынком, и бэктесту нельзя верить.
             if hit_tp and hit_sl:
                 ambiguous += 1
             exit_price = sl if hit_sl else (tp if hit_tp else None)
+            # срок вышел — закрываем по цене закрытия бара
+            if exit_price is None and hold_bars and i - entry_bar >= hold_bars:
+                exit_price = closes[i]
+                timed_exits += 1
             if exit_price is not None:
                 gross = (exit_price - entry) / entry * (1 if pos_side == "Buy" else -1)
                 net = (gross - 2 * fee) * notional
@@ -141,7 +155,7 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
             elif shorts >= strat.min_confluence and shorts > longs:
                 side = "Sell"
             if side:
-                pos_side, entry, last_entry_bar = side, closes[i], i
+                pos_side, entry, last_entry_bar, entry_bar = side, closes[i], i, i
 
     peak, max_dd = 0.0, 0.0
     for v in curve:
@@ -161,6 +175,8 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
         "max_drawdown": max_dd,
         "fees_paid": len(trades) * 2 * fee * notional,
         "ambiguous_share": (ambiguous / len(trades)) if trades else 0.0,
+        "timed_exit_share": (timed_exits / len(trades)) if trades else 0.0,
+        "open_at_end": pos_side is not None,
         "by_side": {
             side: {
                 "trades": len(v),
@@ -183,7 +199,10 @@ def main() -> int:
     ap.add_argument("--notional", type=float, default=25.0, help="размер сделки, USDT")
     ap.add_argument("--fee-bps", type=float, default=5.5, help="комиссия за одну сторону, bp")
     ap.add_argument("--tp", type=float, default=1.2, help="take profit, %%")
-    ap.add_argument("--sl", type=float, default=0.8, help="stop loss, %%")
+    ap.add_argument("--sl", type=float, default=0.8,
+                    help="stop loss, %%; 0 — без стопа, выход только по времени и тейку")
+    ap.add_argument("--hold", type=int, default=0,
+                    help="выход по времени через N баров; 0 — выключен")
     ap.add_argument("--confluence", type=int, default=2)
     ap.add_argument("--testnet", action="store_true")
     ap.add_argument("--csv", help="офлайн-бэктест из CSV: timestamp,open,high,low,close")
@@ -198,6 +217,7 @@ def main() -> int:
         "min_confluence": args.confluence,
         "order_notional_usdt": args.notional,
         "mode": args.mode if args.mode not in ("both", "all") else "reversion",
+        "hold_bars": args.hold,
     }
     if args.demo:
         rows = synthetic_klines(args.bars, seed=args.seed)
@@ -224,6 +244,8 @@ def main() -> int:
     print(f"  Макс. просадка     {r['max_drawdown']:>12.4f} USDT")
     print(f"  Спорных исходов    {r['ambiguous_share']:>11.1%}  "
           f"(свеча задела и тейк, и стоп)")
+    if r["timed_exit_share"]:
+        print(f"  Выходов по времени {r['timed_exit_share']:>11.1%}")
     print(f"  ЧИСТЫЙ РЕЗУЛЬТАТ   {r['net_usdt']:>12.4f} USDT")
     print("-" * 56)
     for side, label in (("Buy", "ЛОНГИ "), ("Sell", "ШОРТЫ")):

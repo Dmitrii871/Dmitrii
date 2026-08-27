@@ -24,16 +24,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.backtest import backtest, csv_klines, fetch_klines  # noqa: E402
 
 TP_GRID = (0.8, 1.0, 1.3, 1.6, 2.0, 2.5)
-SL_GRID = (0.5, 0.7, 0.9, 1.2, 1.5)
+# 0 в сетке стопов означает «без стопа»: связь признака с доходностью
+# живёт на фиксированном горизонте, и стоп уже обычного колебания на этом
+# горизонте выбивает позицию раньше, чем закономерность отработает.
+SL_GRID = (0.0, 0.5, 0.7, 0.9, 1.2, 1.5)
 CONFLUENCE_GRID = (2, 3)
+HOLD_GRID = (0, 6, 12, 24)      # выход по времени через N баров; 0 — выключен
 
 
-def run(rows, tp: float, sl: float, conf: int, mode: str,
+def run(rows, tp: float, sl: float, conf: int, mode: str, hold: int,
         fee: float, notional: float) -> dict:
     return backtest(
         rows,
         {"take_profit_pct": tp, "stop_loss_pct": sl, "min_confluence": conf,
-         "order_notional_usdt": notional, "mode": mode},
+         "order_notional_usdt": notional, "mode": mode, "hold_bars": hold},
         fee, notional,
     )
 
@@ -65,18 +69,21 @@ def main() -> int:
     results = []
     for tp in TP_GRID:
         for sl in SL_GRID:
-            if tp <= sl:
+            if sl > 0 and tp <= sl:
                 continue                      # тейк не больше стопа — бессмысленно
-            for conf in CONFLUENCE_GRID:
-              for mode in (("reversion", "momentum") if args.mode == "both" else
-                           ("reversion", "momentum", "auto") if args.mode == "all" else
-                           (args.mode,)):
-                tr = run(train, tp, sl, conf, mode, args.fee_bps, args.notional)
-                if tr["trades"] < args.min_trades:
-                    continue
-                te = run(test, tp, sl, conf, mode, args.fee_bps, args.notional)
-                results.append({
-                    "tp": tp, "sl": sl, "conf": conf, "mode": mode,
+            for hold in HOLD_GRID:
+              if sl == 0 and hold == 0:
+                  continue                    # без стопа и без срока выйти нечем
+              for conf in CONFLUENCE_GRID:
+                for mode in (("reversion", "momentum") if args.mode == "both" else
+                             ("reversion", "momentum", "auto") if args.mode == "all" else
+                             (args.mode,)):
+                  tr = run(train, tp, sl, conf, mode, hold, args.fee_bps, args.notional)
+                  if tr["trades"] < args.min_trades:
+                      continue
+                  te = run(test, tp, sl, conf, mode, hold, args.fee_bps, args.notional)
+                  results.append({
+                    "tp": tp, "sl": sl, "conf": conf, "mode": mode, "hold": hold,
                     "train_pf": tr["profit_factor"], "train_net": tr["net_usdt"],
                     "train_trades": tr["trades"],
                     "test_pf": te["profit_factor"], "test_net": te["net_usdt"],
@@ -92,12 +99,14 @@ def main() -> int:
     print("\n" + "=" * 78)
     print("  ЛУЧШИЕ 10 ПО ОБУЧЕНИЮ — и что они дали на непросмотренных данных")
     print("=" * 78)
-    print(f"  {'режим':>9} {'TP%':>5} {'SL%':>5} {'сгл':>4} | {'ОБУЧ pf':>8} {'итог$':>8} {'сдел':>5} "
-          f"| {'ПРОВ pf':>8} {'итог$':>8} {'сдел':>5}")
-    print("  " + "-" * 76)
+    print(f"  {'режим':>9} {'TP%':>5} {'SL%':>5} {'срок':>5} {'сгл':>4} | "
+          f"{'ОБУЧ pf':>8} {'итог$':>8} {'сдел':>5} | {'ПРОВ pf':>8} {'итог$':>8} {'сдел':>5}")
+    print("  " + "-" * 84)
     for d in results[:10]:
         holds = "" if d["test_net"] > 0 else "  <- убыток"
-        print(f"  {d['mode']:>9} {d['tp']:>5.1f} {d['sl']:>5.1f} {d['conf']:>4} "
+        srok = "—" if not d["hold"] else str(d["hold"])
+        stop = "нет" if d["sl"] == 0 else f"{d['sl']:.1f}"
+        print(f"  {d['mode']:>9} {d['tp']:>5.1f} {stop:>5} {srok:>5} {d['conf']:>4} "
               f"| {d['train_pf']:>8.2f} {d['train_net']:>8.2f} {d['train_trades']:>5} "
               f"| {d['test_pf']:>8.2f} {d['test_net']:>8.2f} {d['test_trades']:>5}{holds}")
 
@@ -132,8 +141,11 @@ def main() -> int:
     print(f"\n  Рекомендуемая настройка для config.yaml:")
     print(f"      mode: {best['mode']}")
     print(f"      take_profit_pct: {best['tp']}")
-    print(f"      stop_loss_pct: {best['sl']}")
+    print(f"      stop_loss_pct: {best['sl']}"
+          f"{'      # без стопа — просадка не ограничена!' if best['sl'] == 0 else ''}")
     print(f"      min_confluence: {best['conf']}")
+    if best["hold"]:
+        print(f"      hold_bars: {best['hold']}")
     print(f"\n  На непросмотренных данных: профит-фактор {best['test_pf']:.2f}, "
           f"{best['test_trades']} сделок, итог {best['test_net']:+.2f} USDT, "
           f"просадка {best['test_dd']:.2f} USDT")
