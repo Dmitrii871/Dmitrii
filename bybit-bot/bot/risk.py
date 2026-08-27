@@ -97,8 +97,14 @@ class RiskManager:
                 f"{self.min_free_margin:.0%} — риск ликвидации"
             )
 
-    def validate(self, action: Action, position: Position, account: Account, mid: Decimal) -> None:
-        """Бросает RiskReject — отклоняется одно действие, бот продолжает работу."""
+    def validate(self, action: Action, position: Position, account: Account,
+                 mid: Decimal, other_exposure: Decimal = Decimal(0)) -> None:
+        """Бросает RiskReject — отклоняется одно действие, бот продолжает работу.
+
+        other_exposure — нотионал позиций по ОСТАЛЬНЫМ символам. Лимит
+        max_position_usdt относится к счёту целиком: без этого десять
+        символов по лимиту дали бы десятикратный риск от заявленного.
+        """
         if action.kind == "cancel_all":
             return
 
@@ -109,11 +115,15 @@ class RiskManager:
             add = (action.qty or Decimal(0)) * (action.price or mid)
             # для лимитки в ту же сторону складываем с текущей позицией
             same_side = position.side == action.side
-            projected = position.notional() + add if same_side or position.is_flat else abs(position.notional() - add)
+            own = (position.notional() + add if same_side or position.is_flat
+                   else abs(position.notional() - add))
+            projected = own + other_exposure
             if projected > self.max_position:
+                extra = (f" (в том числе {float(other_exposure):.2f} по другим символам)"
+                         if other_exposure > 0 else "")
                 raise RiskReject(
-                    f"позиция выросла бы до {float(projected):.2f} USDT при лимите "
-                    f"{float(self.max_position)} USDT"
+                    f"суммарная позиция выросла бы до {float(projected):.2f} USDT "
+                    f"при лимите {float(self.max_position)} USDT{extra}"
                 )
             if account.available <= 0:
                 raise RiskReject("нулевой доступный баланс")

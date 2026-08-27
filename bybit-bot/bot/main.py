@@ -14,10 +14,10 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from .exchange import Exchange, FatalExchangeError, StaleDataError
+from .exchange import FatalExchangeError, StaleDataError
 from .models import Action, RiskHalt, RiskReject
-from .paper import PaperTrader
 from .plan import TradingPlan
+from .worker import aggregate_summary, make_workers
 from .risk import RiskManager
 from .strategies import build
 from .strategies.base import Context
@@ -67,120 +67,94 @@ def run(cfg: dict, dry_run: bool) -> int:
             log.error("Файл плана %s не найден", plan_path)
             return 1
         plan = TradingPlan.load(plan_path)
-        if plan.symbol != cfg["symbol"]:
-            log.error("План составлен для %s, а бот торгует %s", plan.symbol, cfg["symbol"])
-            return 1
         if plan.note:
             log.info("Сценарий плана: %s", " ".join(plan.note.split()))
 
-    strategy = build(name, strat_cfg.get(name, {}), plan=plan)
-    strategy.validate(cfg.get("fees", {}))
+    workers = make_workers(cfg, os.getenv("BYBIT_API_KEY", ""),
+                           os.getenv("BYBIT_API_SECRET", ""), dry_run, plan)
+    if not workers:
+        log.error("Не задано ни одного символа")
+        return 1
 
-    ex = Exchange(cfg, os.getenv("BYBIT_API_KEY", ""), os.getenv("BYBIT_API_SECRET", ""),
-                  dry_run, paper_equity=float(cfg.get("paper_equity", 500)))
     risk = RiskManager(cfg["risk"])
-    ex.check_clock()
-    inst = ex.instrument()
-    ex.check_position_mode()
     leverage = int(cfg.get("leverage", 3))
-    risk.preflight(ex.account(), leverage)
-    if not dry_run:
-        ex.set_leverage(leverage)
+    lead = workers[0].exchange
+    lead.check_clock()
+    for w in workers:
+        w.exchange.check_position_mode()
+        w.instrument()
+        if not dry_run:
+            w.exchange.set_leverage(leverage)
+    risk.preflight(lead.account(), leverage)
 
-    interval = strat_cfg.get(name, {}).get("interval", "30")
-    warmup = max(strategy.warmup_bars(), 60)
     poll = int(cfg.get("poll_seconds", 10))
     heartbeat_every = max(1, int(cfg.get("heartbeat_seconds", 300)) // max(poll, 1))
     tick = 0
     stale_streak = 0
     start_equity: float | None = None
-    last_bar = 0
-
-    # В сухом прогоне ордера не уходят, но позиция ведётся на бумаге:
-    # так видно не только «бот не падает», но и «бот зарабатывал бы».
-    paper = PaperTrader(
-        maker_bps=float(cfg.get("fees", {}).get("maker_bps", 2.0)),
-        taker_bps=float(cfg.get("fees", {}).get("taker_bps", 5.5)),
-        journal_path=cfg.get("journal_file"),
-    ) if dry_run else None
-    if paper:
-        log.info("Бумажная торговля включена%s",
-                 f", журнал решений: {cfg['journal_file']}" if cfg.get("journal_file") else "")
     log.info("Стратегия '%s' запущена. Ctrl+C или файл %s для остановки.",
              name, cfg["risk"].get("kill_switch_file", "./STOP"))
 
     while not _stop:
         try:
-            account = ex.account()
+            account = lead.account()
             risk.check_session(account)
-
-            ctx = Context(
-                md=ex.market_data(interval, warmup),
-                position=ex.position(),
-                account=account,
-                instrument=inst,
-                open_orders=ex.open_orders(),
-                maker_bps=float(cfg.get("fees", {}).get("maker_bps", 2.0)),
-                taker_bps=float(cfg.get("fees", {}).get("taker_bps", 5.5)),
-            )
-
             tick += 1
             if start_equity is None:
                 start_equity = float(account.equity)
 
-            # Пульс: раз в heartbeat_seconds показываем, что бот жив и чем занят.
-            if tick % heartbeat_every == 1:
-                pos = ctx.position
-                pos_txt = (
-                    f"{pos.side} {pos.size} @ {pos.entry_price} "
-                    f"(P&L {float(pos.unrealised_pnl):+.4f})"
-                    if not pos.is_flat else "нет позиции"
-                )
-                delta = float(account.equity) - start_equity
-                snap = getattr(strategy, "last_snapshot", {})
-                regime = f" | режим {snap['режим']} (ADX {snap.get('adx')})" \
-                    if snap.get("режим") else ""
-                log.info(
-                    "СТАТУС | цена %s | %s | капитал %.4f USDT (%+.4f за сессию) | "
-                    "ордеров %d | спред %.1f bp%s",
-                    ctx.md.last, pos_txt, float(account.equity), delta,
-                    len(ctx.open_orders), ctx.md.spread_bps, regime,
-                )
-                if paper:
-                    paper.log_summary()
+            contexts: dict[str, object] = {}
+            for w in workers:
+                try:
+                    contexts[w.symbol] = w.build_context(account)
+                    w.errors = 0
+                except StaleDataError as exc:
+                    log.warning("%s: %s", w.symbol, exc)
+                except Exception as exc:  # noqa: BLE001
+                    w.errors += 1
+                    log.warning("%s: ошибка данных (%d подряд): %s", w.symbol, w.errors, exc)
 
+            if not contexts:
+                stale_streak += 1
+                if stale_streak >= 10:
+                    log.error("Данные не приходят %d циклов подряд.", stale_streak)
+                    stale_streak = 0
+                time.sleep(poll)
+                continue
             stale_streak = 0
 
-            # Бумажную позицию проверяем на новой свече: не выбило ли TP/SL
-            if paper and ctx.md.bar_time != last_bar and ctx.md.highs and ctx.md.lows:
-                last_bar = ctx.md.bar_time
-                paper.on_price(Decimal(str(ctx.md.highs[-1])), Decimal(str(ctx.md.lows[-1])))
+            total_exposure = sum(
+                (w.exposure(contexts[w.symbol]) for w in workers if w.symbol in contexts),
+                Decimal(0))
 
-            decided = strategy.decide(ctx)
-            if paper:
-                snap = getattr(strategy, "last_snapshot", {})
-                paper.record(ctx.md.last, snap, decided)
-                for a in decided:
-                    paper.on_action(a, ctx.md.last)
-
-            for action in decided:
-                try:
-                    risk.validate(action, ctx.position, ctx.account, ctx.md.mid)
-                except RiskReject as exc:
-                    log.warning("Отклонено риск-менеджером: %s | %s", action.describe(), exc)
+            for w in workers:
+                ctx = contexts.get(w.symbol)
+                if ctx is None:
                     continue
-                ex.execute(action)
+                others = total_exposure - w.exposure(ctx)
+                for action in w.decide(ctx):
+                    try:
+                        risk.validate(action, ctx.position, account, ctx.md.mid, others)
+                    except RiskReject as exc:
+                        log.warning("%s отклонено: %s | %s",
+                                    w.symbol, action.describe(), exc)
+                        continue
+                    w.exchange.execute(action)
+
+            if tick % heartbeat_every == 1:
+                delta = float(account.equity) - start_equity
+                open_pos = [f"{w.symbol} {contexts[w.symbol].position.side}"
+                            for w in workers
+                            if w.symbol in contexts and not contexts[w.symbol].position.is_flat]
+                log.info("СТАТУС | капитал %.4f USDT (%+.4f за сессию) | "
+                         "экспозиция %.2f USDT | позиций %d%s",
+                         float(account.equity), delta, float(total_exposure),
+                         len(open_pos), f" ({', '.join(open_pos)})" if open_pos else "")
+                if dry_run:
+                    _log_paper(workers)
 
         except StaleDataError as exc:
-            # Данные протухли — не торгуем вслепую, но и не падаем:
-            # поток обычно восстанавливается сам.
             log.warning("Пропуск цикла: %s", exc)
-            stale_streak += 1
-            if stale_streak >= 10:
-                log.error("Данные не обновляются %d циклов подряд — снимаю заявки.", stale_streak)
-                if not dry_run:
-                    ex.execute(Action(kind="cancel_all", reason="поток данных не восстановился"))
-                stale_streak = 0
             time.sleep(poll)
             continue
         except FatalExchangeError as exc:
@@ -189,9 +163,13 @@ def run(cfg: dict, dry_run: bool) -> int:
         except RiskHalt as exc:
             log.error("ОСТАНОВКА ПО РИСКУ: %s", exc)
             if not dry_run:
-                log.error("Снимаю ордера и закрываю позицию.")
-                ex.execute(Action(kind="cancel_all", reason="аварийная остановка"))
-                ex.execute(Action(kind="close", reason="аварийная остановка"))
+                log.error("Снимаю ордера и закрываю позиции по всем символам.")
+                for w in workers:
+                    try:
+                        w.exchange.execute(Action(kind="cancel_all", reason="аварийная остановка"))
+                        w.exchange.execute(Action(kind="close", reason="аварийная остановка"))
+                    except Exception as exc2:  # noqa: BLE001
+                        log.error("%s: не удалось закрыть: %s", w.symbol, exc2)
             return 2
         except KeyboardInterrupt:
             break
@@ -202,13 +180,25 @@ def run(cfg: dict, dry_run: bool) -> int:
 
         time.sleep(poll)
 
-    if paper:
+    if dry_run:
         log.info("=" * 60)
         log.info("ИТОГ БУМАЖНОЙ ТОРГОВЛИ ЗА СЕССИЮ")
-        paper.log_summary()
+        _log_paper(workers, final=True)
         log.info("=" * 60)
     log.info("Остановлен штатно.")
     return 0
+
+
+def _log_paper(workers, final: bool = False) -> None:
+    s = aggregate_summary(workers)
+    if not s["trades"]:
+        log.info("[БУМАГА] сделок пока нет")
+        return
+    log.info("[БУМАГА] всего сделок %d | винрейт %.0f%% | комиссии %.4f | ИТОГ %+.4f USDT",
+             s["trades"], s["win_rate"] * 100, s["fees_usdt"], s["net_usdt"])
+    if final:
+        for sym, n, net in s["per_symbol"]:
+            log.info("           %-12s сделок %3d  итог %+8.4f USDT", sym, n, net)
 
 
 def main() -> int:
