@@ -9,10 +9,15 @@
 Мера — информационный коэффициент (IC), корреляция между значением
 признака сейчас и доходностью через k баров.
 
-Порог значимости НЕ фиксирован: уровень шума равен 1/sqrt(n), поэтому
-при 500 наблюдениях случайные ряды дают |IC| около 0.045 сами по себе.
-Сравнивать надо с этим уровнем, а не с числом из учебника, иначе шум
-будет объявлен признаком.
+Порог значимости НЕ фиксирован по двум причинам.
+
+Во-первых, уровень шума равен 1/sqrt(n): при 500 наблюдениях случайные
+ряды дают |IC| около 0.045 сами по себе.
+
+Во-вторых, мы проверяем много признаков сразу. При 27 проверках и уровне
+5% примерно одна-две окажутся «значимыми» случайно. Поэтому применяется
+поправка Бонферрони: уровень делится на число проверок. Без неё таблица
+уверенно покажет находки там, где их нет.
 
 Данные публичные, ключи не нужны:
     python tools/feature_scan.py --symbol ETHUSDT --interval 60 --bars 1000
@@ -24,6 +29,7 @@ import math
 import statistics
 import sys
 from pathlib import Path
+from statistics import NormalDist
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -156,7 +162,13 @@ def main() -> int:
     print(head)
     print("  " + "-" * (len(head) - 2))
 
-    best: list[tuple[float, str, int]] = []
+    # Поправка на множественную проверку: чем больше гипотез, тем выше планка
+    n_tests = len(feats) * len(args.horizons)
+    z_corrected = NormalDist().inv_cdf(1 - 0.05 / n_tests / 2)
+    print(f"Проверок в этом прогоне: {n_tests}. Ожидаемых ложных срабатываний "
+          f"без поправки: {n_tests * 0.05:.1f}")
+
+    best: list[tuple[float, str, int, float, int]] = []
     for name, series in feats.items():
         cells = []
         for h in args.horizons:
@@ -169,8 +181,8 @@ def main() -> int:
                 ys.append(closes[i + h] / closes[i] - 1)
             m = len(xs)
             ic = spearman(xs, ys) if m >= 50 else 0.0
-            # значимость: два стандартных отклонения от нуля при данном m
-            threshold = 2.0 / math.sqrt(m) if m else 1.0
+            # значимость с поправкой на число проверенных гипотез
+            threshold = z_corrected / math.sqrt(m) if m else 1.0
             best.append((abs(ic), name, h, threshold, m))
             mark = "*" if abs(ic) >= threshold * 1.5 else (
                 "~" if abs(ic) >= threshold else " ")
@@ -179,9 +191,11 @@ def main() -> int:
     print("=" * 72)
     example_n = max((b[4] for b in best), default=0)
     if example_n:
-        print(f"  Порог значимости при {example_n} наблюдениях: "
-              f"|IC| > {2/math.sqrt(example_n):.3f}")
-    print("  ~ выше порога значимости    * в полтора раза выше порога")
+        plain = 1.96 / math.sqrt(example_n)
+        corr = z_corrected / math.sqrt(example_n)
+        print(f"  Порог при {example_n} наблюдениях: {plain:.3f} без поправки, "
+              f"{corr:.3f} с поправкой на {n_tests} проверок")
+    print("  ~ выше порога с поправкой    * в полтора раза выше него")
     print("  Всё остальное неотличимо от шума.\n")
 
     strong = [b for b in best if b[0] >= b[3]]
@@ -191,8 +205,11 @@ def main() -> int:
         for ic, name, h, thr, m in strong[:5]:
             print(f"    {name} на горизонте {h} баров: |IC| = {ic:.3f} "
                   f"при пороге {thr:.3f} ({m} набл.)")
-        print("\n  Это ещё не стратегия: IC показывает связь, а не прибыль")
-        print("  после комиссий. Но строить имеет смысл именно вокруг них.\n")
+        print("\n  Это ещё не стратегия: IC показывает связь, а не прибыль после")
+        print("  комиссий. Проверяйте находку оптимизатором — если она не даёт")
+        print("  прибыли вне выборки, связь слишком слаба, чтобы её торговать.")
+        print("\n  И проверьте устойчивость: настоящая закономерность не меняет")
+        print("  знак при смене таймфрейма. Смена знака — признак шума.\n")
     else:
         print("  НИ ОДИН признак не превысил порога значимости.")
         print("  Это объясняет все прошлые результаты: дело не в настройках")

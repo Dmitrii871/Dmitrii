@@ -120,3 +120,49 @@ def test_removing_stop_is_not_free_on_random_walk():
     assert no_stop["max_drawdown"] > with_stop["max_drawdown"], \
         "снятие стопа обязано увеличивать просадку на данных без возврата"
     assert no_stop["profit_factor"] < 1.0, "преимущества из ниоткуда не берётся"
+
+
+# ------------------------------------- поправка на множественную проверку
+def test_bonferroni_raises_threshold_with_more_tests():
+    """Чем больше гипотез проверено, тем выше должна быть планка.
+
+    Базовый порог считается той же формулой, что и с поправкой: сравнение
+    точного расчёта с округлённой константой 1.96 давало расхождение
+    в шестом знаке и ложное падение теста.
+    """
+    from statistics import NormalDist
+    n_obs = 998
+
+    def threshold(n_tests: int) -> float:
+        return NormalDist().inv_cdf(1 - 0.05 / n_tests / 2) / math.sqrt(n_obs)
+
+    plain = threshold(1)
+    assert threshold(27) > plain and threshold(54) > threshold(27), \
+        "порог обязан расти с числом проверок"
+    assert threshold(27) > plain * 1.5, "при 27 проверках планка заметно выше"
+
+
+def test_many_tests_produce_false_positives_without_correction():
+    """Ровно та ловушка, ради которой нужна поправка.
+
+    Проверяя 54 независимых шумовых ряда на уровне 5%, мы обязаны
+    получить около трёх «значимых» результатов из ничего.
+    """
+    rng = random.Random(23)
+    n, tests = 998, 54
+    plain = 1.96 / math.sqrt(n)
+    hits = sum(1 for _ in range(tests)
+               if abs(spearman([rng.gauss(0, 1) for _ in range(n)],
+                               [rng.gauss(0, 1) for _ in range(n)])) > plain)
+    assert hits >= 1, "без поправки ложные находки обязаны появляться"
+
+
+def test_correction_suppresses_noise_findings():
+    from statistics import NormalDist
+    rng = random.Random(29)
+    n, tests = 998, 54
+    corrected = NormalDist().inv_cdf(1 - 0.05 / tests / 2) / math.sqrt(n)
+    hits = sum(1 for _ in range(tests)
+               if abs(spearman([rng.gauss(0, 1) for _ in range(n)],
+                               [rng.gauss(0, 1) for _ in range(n)])) > corrected)
+    assert hits == 0, "с поправкой шум не должен проходить"
