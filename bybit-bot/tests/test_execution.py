@@ -201,3 +201,62 @@ def test_missing_list_key_also_handled():
 def test_first_element_returned_when_present():
     from bot.exchange import first_or_fail
     assert first_or_fail({"list": [{"a": 1}, {"a": 2}]}, "x", "Y") == {"a": 1}
+
+
+def test_public_calls_use_mainnet_client_on_testnet():
+    """Рыночные данные должны идти с основной сети даже при testnet.
+
+    На testnet у менее популярных пар котировок нет вовсе, а где есть —
+    цены синтетические, и проверка стратегии на них ничего не значит.
+    """
+    ex = Exchange.__new__(Exchange)
+    ex.symbol, ex.category, ex.testnet, ex.dry_run = "ETHUSDT", "linear", True, True
+    calls = []
+
+    class Client:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get_tickers(self, **kw):
+            calls.append(self.tag)
+            return {"retCode": 0, "result": {"list": [{"lastPrice": "2463"}]}}
+
+    ex.http = Client("testnet")
+    ex.public = Client("mainnet")
+    ex.market_price()
+    assert calls == ["mainnet"], "котировки обязаны идти с основной сети"
+
+
+def test_public_client_absent_falls_back_to_main_client():
+    """На mainnet отдельный публичный клиент не нужен и не создаётся."""
+    ex = Exchange.__new__(Exchange)
+    ex.symbol, ex.category, ex.testnet = "ETHUSDT", "linear", False
+    ex.public = None
+    calls = []
+
+    class Client:
+        def get_tickers(self, **kw):
+            calls.append("main")
+            return {"retCode": 0, "result": {"list": [{"lastPrice": "2463"}]}}
+
+    ex.http = Client()
+    ex.market_price()
+    assert calls == ["main"]
+
+
+def test_http_client_restored_after_public_call():
+    """Подмена клиента не должна протечь на приватные вызовы."""
+    ex = Exchange.__new__(Exchange)
+    ex.symbol, ex.category, ex.testnet = "ETHUSDT", "linear", True
+
+    class Client:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get_tickers(self, **kw):
+            return {"retCode": 0, "result": {"list": [{"lastPrice": "1"}]}}
+
+    priv, pub = Client("priv"), Client("pub")
+    ex.http, ex.public = priv, pub
+    ex.market_price()
+    assert ex.http is priv, "после публичного вызова клиент обязан вернуться"

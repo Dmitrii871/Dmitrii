@@ -88,6 +88,7 @@ class Exchange:
     # не должно падать.
     public_only: bool = False
     dry_run: bool = False
+    public = None
 
     def __init__(self, cfg: dict, api_key: str, api_secret: str, dry_run: bool,
                  paper_equity: float = 0.0):
@@ -109,14 +110,32 @@ class Exchange:
             api_secret=api_secret,
             recv_window=10_000,
         )
+        # Рыночные данные ВСЕГДА с основной сети. На testnet у менее
+        # популярных пар котировок нет вовсе, а там где есть — цены
+        # синтетические, и проверка стратегии на них ничего не значит.
+        # Ордера при этом уходят туда, куда указано в конфиге.
+        self.public = HTTP(testnet=False, recv_window=10_000) if self.testnet else self.http
         log.info(
             "Подключение к Bybit %s | символ %s | dry_run=%s%s",
             "TESTNET" if self.testnet else "MAINNET", self.symbol, dry_run,
             " | БЕЗ КЛЮЧЕЙ: только публичные данные, условный баланс "
             f"{float(self._paper_equity):.0f} USDT" if self.public_only else "",
         )
+        if self.testnet:
+            log.info("%s: котировки и свечи берутся с ОСНОВНОЙ сети — "
+                     "на testnet цены синтетические", self.symbol)
 
     # ---------------------------------------------------------------- вызовы
+    def _call_public(self, method: str, **kwargs) -> dict:
+        """Публичные данные с основной сети, с той же обработкой ошибок."""
+        if self.public is None:
+            return self._call(method, **kwargs)
+        saved, self.http = self.http, self.public
+        try:
+            return self._call(method, **kwargs)
+        finally:
+            self.http = saved
+
     def _call(self, method: str, **kwargs) -> dict:
         """Вызов API с классификацией ошибок и повтором временных сбоев.
 
@@ -162,7 +181,7 @@ class Exchange:
         которая про часы не говорит ни слова — поэтому проверяем явно.
         """
         local_before = time.time() * 1000
-        res = self._call("get_server_time")
+        res = self._call_public("get_server_time")
         local_after = time.time() * 1000
         server_ms = float(res.get("timeNano", 0)) / 1e6 or float(res.get("timeSecond", 0)) * 1000
         drift = server_ms - (local_before + local_after) / 2
@@ -179,7 +198,7 @@ class Exchange:
     def instrument(self) -> Instrument:
         if self._instrument is not None:
             return self._instrument
-        res = self._call("get_instruments_info", category=self.category, symbol=self.symbol)
+        res = self._call_public("get_instruments_info", category=self.category, symbol=self.symbol)
         item = first_or_fail(res, "справочник инструментов", self.symbol)
         lot, price = item["lotSizeFilter"], item["priceFilter"]
         self._instrument = Instrument(
@@ -242,7 +261,7 @@ class Exchange:
     # ------------------------------------------------------------- состояние
     def market_data(self, interval: str, bars: int = 200) -> MarketData:
         tick = first_or_fail(
-            self._call("get_tickers", category=self.category, symbol=self.symbol),
+            self._call_public("get_tickers", category=self.category, symbol=self.symbol),
             "котировки", self.symbol)
         kl = self._call(
             "get_kline", category=self.category, symbol=self.symbol,
@@ -469,6 +488,6 @@ class Exchange:
 
     def market_price(self) -> Decimal:
         tick = first_or_fail(
-            self._call("get_tickers", category=self.category, symbol=self.symbol),
+            self._call_public("get_tickers", category=self.category, symbol=self.symbol),
             "котировки", self.symbol)
         return _d(tick["lastPrice"])
