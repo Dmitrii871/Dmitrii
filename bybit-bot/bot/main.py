@@ -69,6 +69,77 @@ def confirm_mainnet(cfg: dict) -> None:
         sys.exit(0)
 
 
+def run_check(cfg: dict) -> int:
+    """Проверка готовности к бирже БЕЗ единого ордера — только чтение.
+
+    Отвечает на вопрос «а сможем ли мы вообще подключиться», ДО того как
+    потрачены две недели теста. Проверяется всё, обо что реально
+    ломаются запуски: ключи и их права, IP-ограничение, расхождение
+    часов, режим позиций, минимальные лоты против размера позиции,
+    свежесть данных и достаточность маржи.
+    """
+    ok = True
+
+    def step(name: str, fn):
+        nonlocal ok
+        try:
+            result = fn()
+            print(f"  [ok] {name}{': ' + str(result) if result is not None else ''}")
+            return result
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            print(f"  [СБОЙ] {name}:\n         {exc}")
+            return None
+
+    print("=" * 64)
+    print("  ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БИРЖЕ (ордера НЕ отправляются)")
+    print("=" * 64)
+    if not os.getenv("BYBIT_API_KEY"):
+        print("  [СБОЙ] Нет ключей: скопируйте .env.example в .env и впишите")
+        print("         BYBIT_API_KEY / BYBIT_API_SECRET (права: только Trade,")
+        print("         вывод средств ВЫКЛЮЧЕН). Ключи с bybit.com, не testnet.")
+        return 1
+    print(f"  Контур: {'TESTNET' if cfg.get('testnet', True) else 'ОСНОВНАЯ БИРЖА'}"
+          " | режим только чтения")
+
+    workers = make_workers(cfg, os.getenv("BYBIT_API_KEY", ""),
+                           os.getenv("BYBIT_API_SECRET", ""), dry_run=True, plan=None)
+    lead = workers[0].exchange
+    step("часы синхронизированы", lambda: f"{lead.check_clock():.0f} мс")
+    acc = step("ключи и баланс", lambda: (lambda a: f"капитал {a.equity} USDT, "
+               f"свободно {a.available} USDT")(lead.account()))
+    for w in workers:
+        inst = step(f"{w.symbol}: справочник", lambda w=w: None if w.instrument() else None)
+        step(f"{w.symbol}: режим позиций One-Way",
+             lambda w=w: w.exchange.check_position_mode())
+        step(f"{w.symbol}: свежие свечи",
+             lambda w=w: f"{len(w.exchange.market_data(w.interval, w.warmup).closes)} шт")
+        notional = getattr(w.strategy, "notional", None)
+        if notional is not None:
+            i = w.exchange.instrument()
+            price = w.exchange.market_price()
+            need = max(i.min_qty * price, i.min_notional)
+            if notional < need:
+                ok = False
+                print(f"  [СБОЙ] {w.symbol}: позиция {notional} USDT меньше "
+                      f"минимального лота {need:.0f} USDT")
+            else:
+                print(f"  [ok] {w.symbol}: позиция {notional} USDT >= лота {need:.2f} USDT")
+    try:
+        RiskManager(cfg["risk"]).preflight(lead.account(), int(cfg.get("leverage", 1)))
+        print("  [ok] лимиты риска против маржи")
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        print(f"  [СБОЙ] лимиты риска: {exc}")
+
+    print("=" * 64)
+    if ok:
+        print("  ВСЁ ГОТОВО: подключение рабочее, можно тестировать и запускать.")
+    else:
+        print("  ЕСТЬ ПРОБЛЕМЫ — исправьте строки [СБОЙ] и повторите проверку.")
+    return 0 if ok else 1
+
+
 def run(cfg: dict, dry_run: bool) -> int:
     strat_cfg = cfg["strategy"]
     name = strat_cfg["name"]
@@ -223,6 +294,9 @@ def main() -> int:
     ap.add_argument("--live", action="store_true",
                     help="разрешить mainnet; без него testnet принудительно")
     ap.add_argument("--strategy", choices=["signal", "maker", "trend"], help="переопределить стратегию")
+    ap.add_argument("--check", action="store_true",
+                    help="проверить подключение к бирже (ключи, лоты, часы) и выйти; "
+                         "ордера не отправляются")
     args = ap.parse_args()
 
     load_dotenv()
@@ -235,6 +309,12 @@ def main() -> int:
         cfg["strategy"]["name"] = args.strategy
 
     setup_logging(cfg.get("log_level", "INFO"))
+
+    if args.check:
+        # Проверяем именно ту биржу, где пойдёт торговля — основную.
+        # Ордеров нет, поэтому подтверждение --live здесь не требуется.
+        cfg["testnet"] = False
+        return run_check(cfg)
 
     if not cfg.get("testnet", True) and not args.live:
         log.error("В конфиге testnet: false, но флаг --live не передан. Принудительно testnet.")
