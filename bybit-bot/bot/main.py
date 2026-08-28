@@ -222,7 +222,7 @@ def main() -> int:
     ap.add_argument("--config", default="config.yaml", help="путь к YAML-конфигу")
     ap.add_argument("--live", action="store_true",
                     help="разрешить mainnet; без него testnet принудительно")
-    ap.add_argument("--strategy", choices=["signal", "maker"], help="переопределить стратегию")
+    ap.add_argument("--strategy", choices=["signal", "maker", "trend"], help="переопределить стратегию")
     args = ap.parse_args()
 
     load_dotenv()

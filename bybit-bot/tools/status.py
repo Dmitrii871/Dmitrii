@@ -151,7 +151,12 @@ def main() -> int:
             stale.append(sym)
         vl, vs = last.get("голоса_лонг", ""), last.get("голоса_шорт", "")
         rsi = last.get("rsi", "")
-        seen = f"RSI {rsi or '—':<6} голоса {vl or '?'}/{vs or '?'}"
+        if rsi:
+            seen = f"RSI {rsi:<6} голоса {vl or '?'}/{vs or '?'}"
+        elif last.get("канал"):
+            seen = f"канал {last['канал']}"
+        else:
+            seen = f"RSI {'—':<6} голоса {vl or '?'}/{vs or '?'}"
         if last.get("режим"):
             seen += f"  {last['режим']}"
         if last.get("позиция"):

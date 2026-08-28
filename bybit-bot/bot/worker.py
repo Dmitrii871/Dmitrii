@@ -102,13 +102,19 @@ def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
     interval = scfg.get("interval", "60")
     fees = cfg.get("fees", {})
 
+    overrides = scfg.get("notional_overrides") or {}
     workers: list[SymbolWorker] = []
     for sym in symbols:
+        sym_scfg = scfg
+        if sym in overrides:
+            # у BTC/ETH минимальный лот больше стандартной позиции —
+            # размер задаётся на символ, стратегия своя на каждый символ
+            sym_scfg = {**scfg, "order_notional_usdt": overrides[sym]}
         ex = Exchange({**cfg, "symbol": sym}, api_key, api_secret, dry_run,
                       paper_equity=float(cfg.get("paper_equity", 500)))
         # план подключается только к своему символу
         sym_plan = plan if (plan is not None and plan.symbol == sym) else None
-        strat = build(name, scfg, plan=sym_plan) if name == "signal" else build(name, scfg)
+        strat = build(name, sym_scfg, plan=sym_plan) if name == "signal" else build(name, sym_scfg)
         strat.validate(fees)
         paper = PaperTrader(
             maker_bps=float(fees.get("maker_bps", 2.0)),

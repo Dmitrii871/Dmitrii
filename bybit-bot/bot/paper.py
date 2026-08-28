@@ -193,6 +193,7 @@ class PaperTrader:
             "pct_b": snapshot.get("pct_b", ""),
             "голоса_лонг": snapshot.get("голоса_лонг", ""),
             "голоса_шорт": snapshot.get("голоса_шорт", ""),
+            "канал": snapshot.get("канал", ""),
             "действие": "; ".join(a.describe() for a in actions) or "нет",
             "причина": "; ".join(a.reason for a in actions if a.reason)
                        or snapshot.get("причина", ""),
@@ -202,6 +203,16 @@ class PaperTrader:
         # Заголовок — по состоянию ФАЙЛА, а не по памяти процесса. Флаг
         # «уже писал» переживал удаление файла: бот продолжал дописывать
         # строки без заголовка, и такой CSV не читался ни отчётом, ни Excel.
+        # Смена стратегии меняет набор колонок. Дописывать новые строки
+        # под старый заголовок — значит получить CSV со сдвинутыми полями,
+        # который тихо врёт. Старый файл откладывается в сторону.
+        if path.exists() and path.stat().st_size > 0:
+            with path.open(encoding="utf-8") as fh:
+                head = fh.readline().strip()
+            if head and head.split(",") != list(row):
+                path.rename(path.with_suffix(".csv.old"))
+                log.info("Формат журнала изменился — прежний отложен в %s",
+                         path.with_suffix(".csv.old"))
         write_header = not path.exists() or path.stat().st_size == 0
         with path.open("a", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=list(row))
