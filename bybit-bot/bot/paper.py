@@ -178,8 +178,13 @@ class PaperTrader:
             w.writerow(trade)
 
     # ------------------------------------------------------------ журнал
-    def record(self, price: Decimal, snapshot: dict, actions: list[Action]) -> None:
-        """Строка журнала на каждый цикл: что бот видел и что решил."""
+    def record(self, price: Decimal, snapshot: dict, actions: list[Action],
+               position_side: str | None = None) -> None:
+        """Строка журнала на каждый цикл: что бот видел и что решил.
+
+        position_side — реальная позиция с биржи (боевой режим);
+        None означает бумажный режим, берём симулированную.
+        """
         if not self.journal_path:
             return
         path = Path(self.journal_path)
@@ -197,7 +202,8 @@ class PaperTrader:
             "действие": "; ".join(a.describe() for a in actions) or "нет",
             "причина": "; ".join(a.reason for a in actions if a.reason)
                        or snapshot.get("причина", ""),
-            "позиция": self.position.side if self.position else "",
+            "позиция": (position_side if position_side is not None
+                        else (self.position.side if self.position else "")),
             "итог_usdt": float(self.realized),
         }
         # Заголовок — по состоянию ФАЙЛА, а не по памяти процесса. Флаг

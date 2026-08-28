@@ -33,6 +33,7 @@ class SymbolWorker:
     interval: str
     warmup: int
     paper: PaperTrader | None = None
+    simulate: bool = True   # False = боевой режим: журнал пишем, сделки не имитируем
     last_bar: int = 0
     errors: int = 0
     _instrument: object = field(default=None, repr=False)
@@ -54,7 +55,7 @@ class SymbolWorker:
 
     def build_context(self, account) -> Context:
         md = self.exchange.market_data(self.interval, self.warmup)
-        if self.paper and md.bar_time != self.last_bar and md.highs and md.lows:
+        if self.paper and self.simulate and md.bar_time != self.last_bar and md.highs and md.lows:
             self.last_bar = md.bar_time
             self.paper.on_price(Decimal(str(md.highs[-1])), Decimal(str(md.lows[-1])))
         return Context(
@@ -69,9 +70,13 @@ class SymbolWorker:
         actions = self.strategy.decide(ctx)
         if self.paper:
             snap = getattr(self.strategy, "last_snapshot", {})
-            self.paper.record(ctx.md.last, snap, actions)
-            for a in actions:
-                self.paper.on_action(a, ctx.md.last)
+            # В боевом режиме в колонку «позиция» идёт РЕАЛЬНАЯ позиция с биржи:
+            # бумажной нет, а пустая колонка прятала бы открытую позицию.
+            side = None if self.simulate else ctx.position.side
+            self.paper.record(ctx.md.last, snap, actions, position_side=side)
+            if self.simulate:
+                for a in actions:
+                    self.paper.on_action(a, ctx.md.last)
         return actions
 
     def exposure(self, ctx: Context) -> Decimal:
@@ -124,11 +129,16 @@ def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
             # Без умолчания сделки честно совершались, но не писались на
             # диск — тест выглядел пустым при работающей стратегии.
             journal_path=f"{sym}_{cfg.get('journal_file', 'journal.csv')}",
-            trades_path=f"{sym}_{cfg.get('trades_file', 'trades.csv')}",
-        ) if dry_run else None
+            # Файл сделок — только про симуляцию; в боевом режиме сделки
+            # живут на бирже, а журнал решений ведётся в обоих режимах:
+            # раньше paper создавался лишь при dry_run, и боевой бот летел
+            # вслепую — status.sh показывал вечно устаревшие файлы.
+            trades_path=(f"{sym}_{cfg.get('trades_file', 'trades.csv')}"
+                         if dry_run else None),
+        )
         workers.append(SymbolWorker(
             symbol=sym, exchange=ex, strategy=strat, interval=interval,
-            warmup=warmup_for(strat), paper=paper,
+            warmup=warmup_for(strat), paper=paper, simulate=dry_run,
         ))
     log.info("Символов в работе: %d — %s", len(workers), ", ".join(symbols))
     return workers

@@ -180,3 +180,52 @@ def test_atr_stop_never_tighter_than_half_pct_stop():
     act = strat._entry("Buy", _entry_ctx([100.0] * n, [100.001] * n, [99.999] * n), 2, {})
     floor = 100 * (1 - 0.008 / 2)
     assert float(act.stop_loss) <= floor + 1e-9
+
+
+def test_live_mode_records_journal_but_never_simulates(tmp_path):
+    """Боевой режим: журнал решений пишется, сделки не имитируются.
+
+    Раньше в live журнала не было вовсе — status.sh показывал вечно
+    устаревшие файлы, и наблюдать за ботом было нечем.
+    """
+    from decimal import Decimal as D
+
+    from bot.paper import PaperTrader
+    from bot.worker import SymbolWorker
+
+    jp = tmp_path / "X_journal.csv"
+    paper = PaperTrader(journal_path=str(jp))
+    w = SymbolWorker(symbol="XRPUSDT", exchange=None, strategy=None,
+                     interval="60", warmup=25, paper=paper, simulate=False)
+
+    class Strat:
+        last_snapshot = {"канал": "1..2"}
+
+        def decide(self, ctx):
+            return [Action(kind="market", side="Buy", qty=D("6"))]
+
+    w.strategy = Strat()
+    ctx = _ctx_for_worker()
+    actions = w.decide(ctx)
+    assert actions and paper.position is None, "в live позиция не имитируется"
+    text = jp.read_text(encoding="utf-8")
+    assert "market Buy" in text, "решение обязано попасть в журнал"
+    assert ",Sell," in text or "Sell" in text.split("\n")[1], \
+        "колонка позиции должна показывать РЕАЛЬНУЮ позицию с биржи"
+
+
+def _ctx_for_worker():
+    from decimal import Decimal as D
+
+    from bot.models import Account, Instrument, MarketData
+    from bot.strategies.base import Context
+
+    md = MarketData(symbol="XRPUSDT", bid=D("1"), ask=D("1.01"), last=D("1"),
+                    closes=[1.0] * 30, highs=[1.1] * 30, lows=[0.9] * 30, bar_time=0)
+    return Context(
+        md=md,
+        position=Position("XRPUSDT", "Sell", D("6"), D("1"), D(0), D("1")),
+        account=Account(D(40), D(40)),
+        instrument=Instrument("XRPUSDT", D("0.0001"), D("0.1"), D("0.1"), D("5")),
+        open_orders=[],
+    )

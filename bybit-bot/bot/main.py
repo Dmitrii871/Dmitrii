@@ -277,6 +277,9 @@ def run(cfg: dict, dry_run: bool) -> int:
 
 
 def _log_paper(workers, final: bool = False) -> None:
+    # В боевом режиме симуляции нет — строки [БУМАГА] только сбивали бы с толку
+    if any(not w.simulate for w in workers):
+        return
     s = aggregate_summary(workers)
     if not s["trades"]:
         log.info("[БУМАГА] сделок пока нет")
