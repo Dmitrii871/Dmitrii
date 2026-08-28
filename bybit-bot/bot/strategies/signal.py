@@ -11,7 +11,7 @@ import logging
 import time
 from decimal import Decimal
 
-from ..indicators import adx, bollinger_pct_b, macd, rsi
+from ..indicators import adx, atr, bollinger_pct_b, macd, rsi
 from ..models import Action
 from ..plan import TradingPlan
 from .base import Context, Strategy
@@ -39,6 +39,11 @@ class SignalStrategy(Strategy):
         self.notional = Decimal(str(cfg.get("order_notional_usdt", 25)))
         self.tp_pct = Decimal(str(cfg.get("take_profit_pct", 1.2))) / 100
         self.sl_pct = Decimal(str(cfg.get("stop_loss_pct", 0.8))) / 100
+        # Стоп от волатильности вместо фиксированного процента. Фиксированный
+        # стоп в спокойном рынке слишком широк, а в подвижном его выбивает
+        # обычным шумом до того, как возврат к среднему отработает — в тесте
+        # все выходы подряд были стоп-лоссами. 0 — выключено.
+        self.sl_atr_mult = float(cfg.get("stop_loss_atr_mult", 0))
         self.cooldown_bars = int(cfg.get("cooldown_bars", 2))
         # market  -> вход рыночным ордером, комиссия тейкера
         # post_only -> вход лимиткой у ближней цены, комиссия мейкера
@@ -369,10 +374,18 @@ class SignalStrategy(Strategy):
             kind, post_only = "market", False
 
         qty = self.qty_for_notional(self.notional, price, ctx.instrument)
+        sl_dist = price * self.sl_pct
+        if self.sl_atr_mult > 0 and ctx.md.highs and ctx.md.lows:
+            a = atr(ctx.md.highs, ctx.md.lows, ctx.md.closes)
+            if a and a[-1] > 0:
+                # не уже половины процентного стопа: совсем тесный стоп в
+                # штиле — те же выбивания шумом, от которых и уходим
+                sl_dist = max(Decimal(str(a[-1])) * Decimal(str(self.sl_atr_mult)),
+                              sl_dist / 2)
         if side == "Buy":
-            tp, sl = price * (1 + self.tp_pct), price * (1 - self.sl_pct)
+            tp, sl = price * (1 + self.tp_pct), price - sl_dist
         else:
-            tp, sl = price * (1 - self.tp_pct), price * (1 + self.sl_pct)
+            tp, sl = price * (1 - self.tp_pct), price + sl_dist
 
         # Уровень плана перед расчётным тейком — более реалистичная цель:
         # там стоят чужие заявки, и цена скорее развернётся, чем пройдёт насквозь.

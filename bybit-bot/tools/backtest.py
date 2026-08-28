@@ -18,7 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.strategies.signal import SignalStrategy  # noqa: E402
+from bot.strategies.signal import SignalStrategy
+from bot.indicators import atr  # noqa: E402
 
 
 def synthetic_klines(bars: int, seed: int = 7, start: float = 2460.0,
@@ -99,6 +100,11 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     hold_bars = int(cfg.get("hold_bars", 0))
     use_stop = sl_pct > 0
     fee = fee_bps / 10_000
+    # Стоп от волатильности: дистанция фиксируется на входе по ATR того бара,
+    # не уже половины процентного стопа — идентично живой стратегии.
+    atr_mult = float(cfg.get("stop_loss_atr_mult", 0))
+    atr_series = atr(highs, lows, closes) if atr_mult > 0 else []
+    sl_dist = 0.0
 
     equity = 0.0
     curve = [0.0]
@@ -119,12 +125,13 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
     for i in range(warm, len(closes)):
         # 1) сначала проверяем, не выбило ли открытую позицию на этой свече
         if pos_side is not None:
+            dist = sl_dist if sl_dist > 0 else entry * sl_pct
             if pos_side == "Buy":
-                tp, sl = entry * (1 + tp_pct), entry * (1 - sl_pct)
+                tp, sl = entry * (1 + tp_pct), entry - dist
                 hit_sl = use_stop and lows[i] <= sl
                 hit_tp = highs[i] >= tp
             else:
-                tp, sl = entry * (1 - tp_pct), entry * (1 + sl_pct)
+                tp, sl = entry * (1 - tp_pct), entry + dist
                 hit_sl = use_stop and highs[i] >= sl
                 hit_tp = lows[i] <= tp
             # консервативно: если свеча задела оба уровня, считаем стоп.
@@ -156,6 +163,12 @@ def backtest(rows, cfg: dict, fee_bps: float, notional: float) -> dict:
                 side = "Sell"
             if side:
                 pos_side, entry, last_entry_bar, entry_bar = side, closes[i], i, i
+                # ряд ATR короче ряда цен на period баров — сдвигаем индекс
+                j = i - (len(closes) - len(atr_series))
+                if atr_mult > 0 and 0 <= j < len(atr_series) and atr_series[j] > 0:
+                    sl_dist = max(atr_series[j] * atr_mult, entry * sl_pct / 2)
+                else:
+                    sl_dist = 0.0
 
     peak, max_dd = 0.0, 0.0
     for v in curve:
@@ -201,6 +214,8 @@ def main() -> int:
     ap.add_argument("--tp", type=float, default=1.2, help="take profit, %%")
     ap.add_argument("--sl", type=float, default=0.8,
                     help="stop loss, %%; 0 — без стопа, выход только по времени и тейку")
+    ap.add_argument("--sl-atr", type=float, default=0,
+                    help="стоп = ATR × этот множитель (0 — процентный стоп)")
     ap.add_argument("--hold", type=int, default=0,
                     help="выход по времени через N баров; 0 — выключен")
     ap.add_argument("--confluence", type=int, default=2)
@@ -214,6 +229,7 @@ def main() -> int:
     cfg = {
         "take_profit_pct": args.tp,
         "stop_loss_pct": args.sl,
+        "stop_loss_atr_mult": args.sl_atr,
         "min_confluence": args.confluence,
         "order_notional_usdt": args.notional,
         "mode": args.mode if args.mode not in ("both", "all") else "reversion",

@@ -127,3 +127,56 @@ def test_signal_reports_short_history():
     )
     assert strat.decide(ctx) == []
     assert "мало данных" in strat.last_snapshot.get("причина", "")
+
+
+def _entry_ctx(closes, highs, lows):
+    from bot.strategies.base import Context
+    from bot.models import Account, Instrument, MarketData, Position
+
+    md = MarketData(symbol="ETHUSDT", bid=Decimal("99.9"), ask=Decimal("100.1"),
+                    last=Decimal("100"), closes=closes, highs=highs, lows=lows,
+                    bar_time=0)
+    return Context(
+        md=md,
+        position=Position("ETHUSDT", "", Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        account=Account(Decimal(100), Decimal(100)),
+        instrument=Instrument("ETHUSDT", Decimal("0.01"), Decimal("0.001"),
+                              Decimal("0.001"), Decimal("1")),
+        open_orders=[],
+    )
+
+
+def test_atr_stop_widens_with_volatility():
+    """Стоп от ATR: в подвижном рынке дальше, чем фиксированный процент.
+
+    Фиксированный стоп 0.8% в тесте выбивало шумом — все выходы подряд
+    были стоп-лоссами раньше, чем возврат к среднему успевал отработать.
+    """
+    from bot.strategies import build
+
+    n = 80
+    closes = [100.0] * n
+    quiet = build("signal", {"stop_loss_atr_mult": 2.0})
+    a_quiet = quiet._entry("Buy", _entry_ctx(closes, [100.1] * n, [99.9] * n), 2, {})
+
+    wild = build("signal", {"stop_loss_atr_mult": 2.0})
+    a_wild = wild._entry("Buy", _entry_ctx(closes, [102.0] * n, [98.0] * n), 2, {})
+
+    assert a_wild.stop_loss < a_quiet.stop_loss, (
+        "в подвижном рынке стоп обязан быть дальше от входа")
+
+    # выключенный ATR-стоп — прежнее поведение
+    off = build("signal", {})
+    a_off = off._entry("Buy", _entry_ctx(closes, [102.0] * n, [98.0] * n), 2, {})
+    assert abs(float(a_off.stop_loss) - 100 * (1 - 0.008)) < 1e-6
+
+
+def test_atr_stop_never_tighter_than_half_pct_stop():
+    """В штиле ATR-стоп не должен прилипать к цене — не уже половины процентного."""
+    from bot.strategies import build
+
+    n = 80
+    strat = build("signal", {"stop_loss_atr_mult": 0.1})
+    act = strat._entry("Buy", _entry_ctx([100.0] * n, [100.001] * n, [99.999] * n), 2, {})
+    floor = 100 * (1 - 0.008 / 2)
+    assert float(act.stop_loss) <= floor + 1e-9
