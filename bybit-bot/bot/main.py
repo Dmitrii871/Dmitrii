@@ -294,6 +294,9 @@ def main() -> int:
     ap.add_argument("--live", action="store_true",
                     help="разрешить mainnet; без него testnet принудительно")
     ap.add_argument("--strategy", choices=["signal", "maker", "trend"], help="переопределить стратегию")
+    ap.add_argument("--yes", action="store_true",
+                    help="подтверждение реального режима уже дано (его спрашивает "
+                         "start.sh: под nohup у бота нет клавиатуры)")
     ap.add_argument("--check", action="store_true",
                     help="проверить подключение к бирже (ключи, лоты, часы) и выйти; "
                          "ордера не отправляются")
@@ -321,7 +324,7 @@ def main() -> int:
         cfg["testnet"] = True
 
     dry_run = bool(cfg.get("dry_run", True))
-    if not cfg.get("testnet", True) and not dry_run:
+    if not cfg.get("testnet", True) and not dry_run and not args.yes:
         confirm_mainnet(cfg)
 
     if not os.getenv("BYBIT_API_KEY"):

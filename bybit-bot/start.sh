@@ -53,7 +53,29 @@ if [ -s bot.out ]; then
     cat bot.out >> bot.history.log
 fi
 : > bot.out
-nohup "$PY" -m bot.main --config config.yaml >> bot.out 2>&1 &
+# Реальный режим: подтверждение спрашиваем ЗДЕСЬ, пока есть клавиатура —
+# под nohup input() у бота падает, и запуск молча умирал бы.
+EXTRA=""
+if [ "$1" = "--live" ]; then
+    if ! grep -q "dry_run: false" config.yaml; then
+        echo "В config.yaml не выключен dry_run — реальный режим невозможен."
+        exit 1
+    fi
+    echo "=================================================================="
+    echo "  ВНИМАНИЕ: РЕАЛЬНЫЕ ДЕНЬГИ. Ордера пойдут на основную биржу."
+    echo "  Лимиты: $(grep max_position_usdt config.yaml | head -1)"
+    echo "          $(grep max_daily_loss_usdt config.yaml | head -1)"
+    echo "=================================================================="
+    printf "Введите YES заглавными для запуска: "
+    read -r ANSWER
+    if [ "$ANSWER" != "YES" ]; then
+        echo "Отменено."
+        exit 0
+    fi
+    EXTRA="--live --yes"
+fi
+
+nohup "$PY" -m bot.main --config config.yaml $EXTRA >> bot.out 2>&1 &
 PID=$!
 echo "$PID" > bot.pid
 echo "Бот запущен, PID $PID"
