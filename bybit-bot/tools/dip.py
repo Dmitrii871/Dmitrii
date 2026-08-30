@@ -55,6 +55,53 @@ def run_rule(closes, lows, entry_bb, entry_rsi, exit_bb, exit_rsi, need_both):
     return trades
 
 
+def run_flip(closes, lows, highs, low_lvl=30.0, high_lvl=70.0):
+    """Перевёртыш: лонг при RSI<=30, шорт при RSI>=70, позиция всегда одна.
+
+    Сделка: (вход, выход, баров, худшая цена против позиции, сторона).
+    """
+    r = rsi(closes, RSI_P)
+    off = len(closes) - len(r)
+    trades = []
+    side = None
+    entry = 0.0
+    entry_i = 0
+    worst = 0.0
+    for i in range(off + 1, len(closes)):
+        ri = r[i - off]
+        price = closes[i]
+        want = "long" if ri <= low_lvl else ("short" if ri >= high_lvl else None)
+        if want and want != side:
+            if side == "long":
+                trades.append((entry, price, i - entry_i, worst, "long"))
+            elif side == "short":
+                trades.append((entry, price, i - entry_i, worst, "short"))
+            side, entry, entry_i, worst = want, price, i, price
+        elif side == "long":
+            worst = min(worst, lows[i])
+        elif side == "short":
+            worst = max(worst, highs[i])
+    return trades
+
+
+def report_flip(trades, fee_bps, funding_bps_day=3.0):
+    fee = fee_bps / 10_000
+    fund = funding_bps_day / 10_000
+    nets = []
+    dips = []
+    for e, x, h, w, side in trades:
+        gross = (x - e) / e if side == "long" else (e - x) / e
+        nets.append((gross - 2 * fee - (h / 24) * fund) * NOTIONAL)
+        dips.append((e - w) / e if side == "long" else (w - e) / e)
+    wins = [n for n in nets if n > 0]
+    return {
+        "n": len(nets), "net": sum(nets),
+        "wr": len(wins) / len(nets) * 100 if nets else 0,
+        "avg_hold": sum(h for _, _, h, _, _ in trades) / len(trades) if trades else 0,
+        "worst_dip": max(dips, default=0.0) * 100,
+    }
+
+
 def report(trades, fee_bps):
     fee = fee_bps / 10_000
     nets = [((x - e) / e - 2 * fee) * NOTIONAL for e, x, _, _ in trades]
@@ -99,6 +146,26 @@ def main() -> int:
                   f"{g['worst_dip']:>10.1f}%")
         print(f"  {'ИТОГО':<10}{total_n:>7.0f}{'':>9}{'':>9}{'':>10}"
               f"{total_spot:>11.2f}{total_perp:>12.2f}\n")
+    print("ПРАВИЛО-ПЕРЕВЁРТЫШ: лонг при RSI<=30, шорт при RSI>=70 (фьючерсы,")
+    print("комиссия 5.5 bp/сторона + фандинг 3 bp/день удержания)")
+    print(f"  {'символ':<10}{'сделок':>7}{'винрейт':>9}{'держали':>9}"
+          f"{'итог USDT':>11}{'макс.против':>12}")
+    t_net = t_n = 0.0
+    for sym in SYMBOLS:
+        try:
+            rows = fetch_klines(sym, "60", BARS, testnet=False)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {sym}: нет данных ({exc})")
+            continue
+        closes = [float(x[4]) for x in rows]
+        lows = [float(x[3]) for x in rows]
+        highs = [float(x[2]) for x in rows]
+        fr = report_flip(run_flip(closes, lows, highs), 5.5)
+        t_net += fr["net"]; t_n += fr["n"]
+        print(f"  {sym:<10}{fr['n']:>7}{fr['wr']:>8.0f}%{fr['avg_hold']:>8.1f}ч"
+              f"{fr['net']:>11.2f}{fr['worst_dip']:>11.1f}%")
+    print(f"  {'ИТОГО':<10}{t_n:>7.0f}{'':>9}{'':>9}{t_net:>11.2f}\n")
+
     print("Читать так: «валовыми» — если бы комиссий не было; следующие две")
     print("колонки — что остаётся на споте и на перпетуалах. «Макс.пров.» —")
     print("насколько глубоко цена уходила ПОД вход, пока ждали отскока:")
