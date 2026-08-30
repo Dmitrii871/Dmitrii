@@ -55,9 +55,12 @@ def run_rule(closes, lows, entry_bb, entry_rsi, exit_bb, exit_rsi, need_both):
     return trades
 
 
-def run_flip(closes, lows, highs, low_lvl=30.0, high_lvl=70.0):
+def run_flip(closes, lows, highs, low_lvl=30.0, high_lvl=70.0, stop_pct=0.0):
     """Перевёртыш: лонг при RSI<=30, шорт при RSI>=70, позиция всегда одна.
 
+    stop_pct > 0 — стоп-лосс от входа; после стопа повторный вход в ту же
+    сторону разрешается только после того, как RSI вышел из крайней зоны,
+    иначе правило немедленно откупает тот же нож.
     Сделка: (вход, выход, баров, худшая цена против позиции, сторона).
     """
     r = rsi(closes, RSI_P)
@@ -67,20 +70,40 @@ def run_flip(closes, lows, highs, low_lvl=30.0, high_lvl=70.0):
     entry = 0.0
     entry_i = 0
     worst = 0.0
+    long_armed = short_armed = True
     for i in range(off + 1, len(closes)):
         ri = r[i - off]
         price = closes[i]
-        want = "long" if ri <= low_lvl else ("short" if ri >= high_lvl else None)
-        if want and want != side:
-            if side == "long":
-                trades.append((entry, price, i - entry_i, worst, "long"))
-            elif side == "short":
-                trades.append((entry, price, i - entry_i, worst, "short"))
-            side, entry, entry_i, worst = want, price, i, price
-        elif side == "long":
+
+        if ri > low_lvl + 5:
+            long_armed = True
+        if ri < high_lvl - 5:
+            short_armed = True
+
+        if side == "long":
             worst = min(worst, lows[i])
+            if stop_pct and lows[i] <= entry * (1 - stop_pct / 100):
+                stop_price = entry * (1 - stop_pct / 100)
+                trades.append((entry, stop_price, i - entry_i, worst, "long"))
+                side, long_armed = None, False
+                continue
         elif side == "short":
             worst = max(worst, highs[i])
+            if stop_pct and highs[i] >= entry * (1 + stop_pct / 100):
+                stop_price = entry * (1 + stop_pct / 100)
+                trades.append((entry, stop_price, i - entry_i, worst, "short"))
+                side, short_armed = None, False
+                continue
+
+        want = "long" if ri <= low_lvl else ("short" if ri >= high_lvl else None)
+        if want == "long" and not long_armed:
+            want = None
+        if want == "short" and not short_armed:
+            want = None
+        if want and want != side:
+            if side is not None:
+                trades.append((entry, price, i - entry_i, worst, side))
+            side, entry, entry_i, worst = want, price, i, price
     return trades
 
 
@@ -148,23 +171,26 @@ def main() -> int:
               f"{total_spot:>11.2f}{total_perp:>12.2f}\n")
     print("ПРАВИЛО-ПЕРЕВЁРТЫШ: лонг при RSI<=30, шорт при RSI>=70 (фьючерсы,")
     print("комиссия 5.5 bp/сторона + фандинг 3 bp/день удержания)")
-    print(f"  {'символ':<10}{'сделок':>7}{'винрейт':>9}{'держали':>9}"
-          f"{'итог USDT':>11}{'макс.против':>12}")
-    t_net = t_n = 0.0
+    data = {}
     for sym in SYMBOLS:
         try:
             rows = fetch_klines(sym, "60", BARS, testnet=False)
         except Exception as exc:  # noqa: BLE001
             print(f"  {sym}: нет данных ({exc})")
             continue
-        closes = [float(x[4]) for x in rows]
-        lows = [float(x[3]) for x in rows]
-        highs = [float(x[2]) for x in rows]
-        fr = report_flip(run_flip(closes, lows, highs), 5.5)
-        t_net += fr["net"]; t_n += fr["n"]
-        print(f"  {sym:<10}{fr['n']:>7}{fr['wr']:>8.0f}%{fr['avg_hold']:>8.1f}ч"
-              f"{fr['net']:>11.2f}{fr['worst_dip']:>11.1f}%")
-    print(f"  {'ИТОГО':<10}{t_n:>7.0f}{'':>9}{'':>9}{t_net:>11.2f}\n")
+        data[sym] = ([float(x[4]) for x in rows], [float(x[3]) for x in rows],
+                     [float(x[2]) for x in rows])
+    for stop, label in ((0.0, "без стопа"), (2.0, "стоп 2%"), (5.0, "стоп 5%")):
+        print(f"  --- {label} ---")
+        print(f"  {'символ':<10}{'сделок':>7}{'винрейт':>9}{'держали':>9}"
+              f"{'итог USDT':>11}{'макс.против':>12}")
+        t_net = t_n = 0.0
+        for sym, (closes, lows, highs) in data.items():
+            fr = report_flip(run_flip(closes, lows, highs, stop_pct=stop), 5.5)
+            t_net += fr["net"]; t_n += fr["n"]
+            print(f"  {sym:<10}{fr['n']:>7}{fr['wr']:>8.0f}%{fr['avg_hold']:>8.1f}ч"
+                  f"{fr['net']:>11.2f}{fr['worst_dip']:>11.1f}%")
+        print(f"  {'ИТОГО':<10}{t_n:>7.0f}{'':>9}{'':>9}{t_net:>11.2f}\n")
 
     print("Читать так: «валовыми» — если бы комиссий не было; следующие две")
     print("колонки — что остаётся на споте и на перпетуалах. «Макс.пров.» —")
