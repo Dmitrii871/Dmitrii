@@ -81,6 +81,18 @@ def _read(path: str) -> list[dict]:
         return []
 
 
+def _num(v) -> float:
+    """Число из поля CSV; пустота и мусор — ноль, отчёт не падает.
+
+    У сделок, взятых с биржи, комиссия не заполняется отдельно (она уже
+    внутри итога closedPnl) — float('') ронял весь статус.
+    """
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _read_trades(path: str) -> list[dict]:
     try:
         with open(path, newline="", encoding="utf-8") as fh:
@@ -199,7 +211,7 @@ def main() -> int:
             print("  при часовом таймфрейме это до нескольких сделок в сутки.")
         return 0
 
-    nets = [float(t["net"]) for t in trades]
+    nets = [_num(t.get("net")) for t in trades]
     wins = [n for n in nets if n > 0]
     maker = [t for t in trades if str(t.get("maker_exit", "")).lower() in ("true", "1")]
     gross_loss = abs(sum(n for n in nets if n <= 0))
@@ -208,7 +220,7 @@ def main() -> int:
     print(f"  винрейт          {len(wins) / len(trades) * 100:.0f}%  ({len(wins)} из {len(trades)})")
     print(f"  ВЫХОДЫ МЕЙКЕРОМ  {len(maker) / len(trades) * 100:.0f}%  ({len(maker)} из {len(trades)})")
     print(f"  профит-фактор    {f'{pf:.2f}' if pf else '—'}")
-    print(f"  комиссии         {sum(float(t['fees']) for t in trades):.4f} USDT")
+    print(f"  комиссии         {sum(_num(t.get('fees')) for t in trades):.4f} USDT")
     print(f"  ИТОГ             {sum(nets):+.4f} USDT")
     print("  по символам:     " + ", ".join(f"{k} {v}" for k, v in per_symbol.most_common() if v))
     print("  причины выхода:  " + ", ".join(
