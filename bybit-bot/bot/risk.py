@@ -48,15 +48,22 @@ class RiskManager:
             self._day, float(account.equity), float(self.max_daily_loss),
         )
 
-    def preflight(self, account: Account, max_leverage: int) -> None:
+    def preflight(self, account: Account, max_leverage: int,
+                  open_exposure: Decimal = Decimal(0)) -> None:
         """Проверка согласованности лимитов с реальным балансом — до первой сделки.
 
         Частая ошибка: max_position_usdt задан больше, чем позволяет депозит,
         и бот открывает позицию, после чего немедленно падает по марже.
+
+        open_exposure — нотионал УЖЕ открытых позиций. Их маржа уже списана
+        из available, и лимит они уже занимают: перезапуск с открытой
+        позицией требовал маржу на весь лимит заново и отказывался
+        стартовать, бросая живую позицию без присмотра.
         """
         if account.equity <= 0:
             raise RiskHalt("нулевой капитал на счёте")
-        need = self.max_position / max(Decimal(max_leverage), Decimal(1))
+        remaining = max(self.max_position - open_exposure, Decimal(0))
+        need = remaining / max(Decimal(max_leverage), Decimal(1))
         after = account.available - need
         ratio = float(after / account.equity)
         if ratio < self.min_free_margin:
@@ -70,9 +77,9 @@ class RiskManager:
                 f"Поставьте max_position_usdt не больше {max(float(safe), 0):.0f}."
             )
         log.info(
-            "Проверка лимитов пройдена: позиция до %.0f USDT требует %.2f USDT маржи, "
-            "свободной маржи останется %.1f%%",
-            float(self.max_position), float(need), ratio * 100,
+            "Проверка лимитов пройдена: лимит %.0f USDT (открыто %.0f), "
+            "добор требует %.2f USDT маржи, свободной останется %.1f%%",
+            float(self.max_position), float(open_exposure), float(need), ratio * 100,
         )
 
     # ------------------------------------------------------- проверки цикла

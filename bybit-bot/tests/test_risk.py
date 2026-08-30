@@ -181,3 +181,29 @@ def test_fatal_and_retryable_codes_do_not_overlap():
     assert not (set(FATAL) & set(RETRYABLE))
     assert "10006" in RETRYABLE, "лимит запросов повторяется"
     assert "10004" in FATAL, "неверная подпись не лечится повтором"
+
+
+def test_preflight_counts_open_positions_toward_limit():
+    """Перезапуск с открытой позицией: маржа нужна только на ДОБОР.
+
+    Проверка на весь лимит заново отказывалась стартовать и бросала
+    живую позицию на бирже без присмотра.
+    """
+    from decimal import Decimal
+
+    from bot.models import Account, RiskHalt
+    from bot.risk import RiskManager
+
+    rm = RiskManager({"max_position_usdt": 25, "max_daily_loss_usdt": 1})
+    acc = Account(equity=Decimal("41"), available=Decimal("29"))
+
+    # без учёта открытых 12 USDT — отказ...
+    try:
+        rm.preflight(acc, 1)
+        blocked = False
+    except RiskHalt:
+        blocked = True
+    assert blocked, "полный лимит 25 при свободных 29 обязан не пройти порог 25%"
+
+    # ...а с учётом — добор всего 13 USDT, и это проходит
+    rm.preflight(acc, 1, open_exposure=Decimal("12"))

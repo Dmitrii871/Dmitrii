@@ -126,7 +126,8 @@ def run_check(cfg: dict) -> int:
             else:
                 print(f"  [ok] {w.symbol}: позиция {notional} USDT >= лота {need:.2f} USDT")
     try:
-        RiskManager(cfg["risk"]).preflight(lead.account(), int(cfg.get("leverage", 1)))
+        open_exp = sum((w.exchange.position().notional() for w in workers), Decimal(0))
+        RiskManager(cfg["risk"]).preflight(lead.account(), int(cfg.get("leverage", 1)), open_exp)
         print("  [ok] лимиты риска против маржи")
     except Exception as exc:  # noqa: BLE001
         ok = False
@@ -169,7 +170,12 @@ def run(cfg: dict, dry_run: bool) -> int:
         w.instrument()
         if not dry_run:
             w.exchange.set_leverage(leverage)
-    risk.preflight(lead.account(), leverage)
+    open_exposure = Decimal(0)
+    if not dry_run:
+        # маржа уже открытых позиций списана из available — считаем добор
+        for w in workers:
+            open_exposure += w.exchange.position().notional()
+    risk.preflight(lead.account(), leverage, open_exposure)
 
     poll = int(cfg.get("poll_seconds", 10))
     heartbeat_every = max(1, int(cfg.get("heartbeat_seconds", 300)) // max(poll, 1))
