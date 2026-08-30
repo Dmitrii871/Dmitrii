@@ -26,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.indicators import rsi  # noqa: E402
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-INTERVAL = "60"
-CHECK_EVERY = 300          # секунд между проверками; чаще незачем — RSI часовой
+INTERVAL = "15"            # 15-минутные свечи; третьим аргументом можно сменить
+CHECK_EVERY = 120
 
 
 def notify(title: str, text: str) -> None:
@@ -46,12 +46,13 @@ def notify(title: str, text: str) -> None:
 def main() -> int:
     buy_lvl = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
     sell_lvl = float(sys.argv[2]) if len(sys.argv) > 2 else 70.0
+    interval = sys.argv[3] if len(sys.argv) > 3 else INTERVAL
 
     from pybit.unified_trading import HTTP
     http = HTTP(testnet=False)
 
     zone: dict[str, str] = {s: "" for s in SYMBOLS}   # "", "low", "high"
-    print(f"Сигналка запущена: RSI(14) на часовиках, покупка<={buy_lvl:g}, "
+    print(f"Сигналка запущена: RSI(14) на {interval}-минутках, покупка<={buy_lvl:g}, "
           f"продажа>={sell_lvl:g}, проверка раз в {CHECK_EVERY // 60} мин")
     notify("Сигналка запущена", f"RSI: зоны {buy_lvl:g} / {sell_lvl:g}")
 
@@ -59,7 +60,7 @@ def main() -> int:
         for sym in SYMBOLS:
             try:
                 kl = http.get_kline(category="linear", symbol=sym,
-                                    interval=INTERVAL, limit=60)["result"]["list"]
+                                    interval=interval, limit=60)["result"]["list"]
                 closes = [float(r[4]) for r in reversed(kl)][:-1]
                 series = rsi(closes)
                 if not series:
