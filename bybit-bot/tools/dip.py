@@ -23,7 +23,8 @@ from bot.indicators import bollinger_pct_b, rsi  # noqa: E402
 from tools.backtest import fetch_klines  # noqa: E402
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-BARS = 2000
+# число свечей можно передать аргументом: tools/dip.py 12000 (~1.4 года часовиков)
+BARS = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 2000
 NOTIONAL = 25.0
 RSI_P, BB_P = 14, 20
 
