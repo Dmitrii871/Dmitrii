@@ -77,10 +77,10 @@ class TrendStrategy(Strategy):
         if not pos.is_flat:
             if pos.side == "Buy" and price <= exit_lo:
                 return [Action(kind="close",
-                               reason=f"цена {price} пробила {self.exit_days}-дневный минимум {exit_lo}")]
+                               reason=f"цена {price} пробила минимум за {self.exit_days} баров: {exit_lo}")]
             if pos.side == "Sell" and price >= exit_hi:
                 return [Action(kind="close",
-                               reason=f"цена {price} пробила {self.exit_days}-дневный максимум {exit_hi}")]
+                               reason=f"цена {price} пробила максимум за {self.exit_days} баров: {exit_hi}")]
             return []
 
         long_break = price >= enter_hi
@@ -113,6 +113,6 @@ class TrendStrategy(Strategy):
               else price * (1 + self.disaster_stop_pct))
         return Action(
             kind="market", side=side, qty=qty, stop_loss=sl,
-            reason=f"пробой {self.enter_days}-дневного канала "
+            reason=f"пробой канала за {self.enter_days} баров "
                    f"({'вверх' if side == 'Buy' else 'вниз'}) на {price}",
         )

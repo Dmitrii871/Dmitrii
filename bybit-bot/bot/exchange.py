@@ -354,6 +354,18 @@ class Exchange:
             available=_d(acc.get("totalAvailableBalance")),
         )
 
+    def closed_pnl(self, limit: int = 10) -> list[dict]:
+        """Закрытые сделки с реальными ценами и итогом, как их видит биржа.
+
+        Единственный честный источник результата в боевом режиме: цена
+        исполнения включает проскальзывание, closedPnl — комиссии.
+        """
+        if self.public_only:
+            return []
+        res = self._call("get_closed_pnl", category=self.category,
+                         symbol=self.symbol, limit=limit)
+        return res.get("list") or []
+
     def open_orders(self) -> list[dict]:
         if self.public_only:
             return []

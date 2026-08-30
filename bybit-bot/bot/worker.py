@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import time
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from .exchange import Exchange
@@ -34,6 +36,7 @@ class SymbolWorker:
     warmup: int
     paper: PaperTrader | None = None
     simulate: bool = True   # False = боевой режим: журнал пишем, сделки не имитируем
+    _pnl_after_ms: int = 0  # закрытия с биржи старше этой метки уже записаны
     last_bar: int = 0
     errors: int = 0
     _instrument: object = field(default=None, repr=False)
@@ -55,6 +58,8 @@ class SymbolWorker:
 
     def build_context(self, account) -> Context:
         md = self.exchange.market_data(self.interval, self.warmup)
+        if not self.simulate:
+            self._collect_live_closes()
         if self.paper and self.simulate and md.bar_time != self.last_bar and md.highs and md.lows:
             self.last_bar = md.bar_time
             self.paper.on_price(Decimal(str(md.highs[-1])), Decimal(str(md.lows[-1])))
@@ -65,6 +70,51 @@ class SymbolWorker:
             instrument=self.instrument(),
             open_orders=self.exchange.open_orders(),
         )
+
+    def _collect_live_closes(self) -> None:
+        """Закрытые боевые сделки — с биржи в файл сделок.
+
+        В live симуляции нет, и без этого статус вечно показывал
+        «СДЕЛОК: 0» при реально закрытых позициях. Биржа — единственный
+        честный источник: её цены включают проскальзывание, closedPnl —
+        комиссии.
+        """
+        if self.paper is None or not self.paper.trades_path:
+            return
+        if self._pnl_after_ms == 0:
+            # первая инициализация: древнюю историю не тащим
+            self._pnl_after_ms = int(time.time() * 1000) - 60_000
+        try:
+            rows = self.exchange.closed_pnl(limit=10)
+        except Exception as exc:  # noqa: BLE001 — статистика не должна ронять торговлю
+            log.warning("%s: не удалось получить закрытые сделки: %s", self.symbol, exc)
+            return
+        fresh = sorted((r for r in rows
+                        if int(r.get("updatedTime") or r.get("createdTime") or 0)
+                        > self._pnl_after_ms),
+                       key=lambda r: int(r.get("updatedTime") or r.get("createdTime") or 0))
+        for r in fresh:
+            ts = int(r.get("updatedTime") or r.get("createdTime") or 0)
+            self._pnl_after_ms = max(self._pnl_after_ms, ts)
+            closing_side = r.get("side", "")
+            pos_side = "Buy" if closing_side == "Sell" else "Sell"
+            trade = {
+                "side": pos_side,
+                "entry": r.get("avgEntryPrice", ""),
+                "exit": r.get("avgExitPrice", ""),
+                "size": r.get("qty", ""),
+                "gross": "",
+                "fees": "",
+                "net": r.get("closedPnl", ""),
+                "reason": "закрытие на бирже",
+                "opened_at": "",
+                "maker_exit": False,
+                "closed_at": datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                                     .isoformat(timespec="seconds"),
+            }
+            self.paper._append_trade(trade)  # noqa: SLF001 — общий формат файла сделок
+            log.info("[БИРЖА] %s закрыта %s: вход %s выход %s итог %s USDT",
+                     self.symbol, pos_side, trade["entry"], trade["exit"], trade["net"])
 
     def decide(self, ctx: Context) -> list[Action]:
         actions = self.strategy.decide(ctx)
@@ -133,8 +183,7 @@ def make_workers(cfg: dict, api_key: str, api_secret: str, dry_run: bool,
             # живут на бирже, а журнал решений ведётся в обоих режимах:
             # раньше paper создавался лишь при dry_run, и боевой бот летел
             # вслепую — status.sh показывал вечно устаревшие файлы.
-            trades_path=(f"{sym}_{cfg.get('trades_file', 'trades.csv')}"
-                         if dry_run else None),
+            trades_path=f"{sym}_{cfg.get('trades_file', 'trades.csv')}",
         )
         workers.append(SymbolWorker(
             symbol=sym, exchange=ex, strategy=strat, interval=interval,

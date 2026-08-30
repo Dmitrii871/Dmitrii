@@ -229,3 +229,40 @@ def _ctx_for_worker():
         instrument=Instrument("XRPUSDT", D("0.0001"), D("0.1"), D("0.1"), D("5")),
         open_orders=[],
     )
+
+
+def test_live_closes_collected_from_exchange(tmp_path):
+    """Закрытые боевые сделки берутся с биржи и пишутся в файл сделок."""
+    from bot.paper import PaperTrader
+    from bot.worker import SymbolWorker
+    import time as _t
+
+    now_ms = int(_t.time() * 1000)
+    tp = tmp_path / "X_trades.csv"
+
+    class Ex:
+        def closed_pnl(self, limit=10):
+            return [
+                {"side": "Sell", "avgEntryPrice": "1.3941", "avgExitPrice": "1.3878",
+                 "qty": "4.3", "closedPnl": "-0.031", "updatedTime": str(now_ms)},
+                {"side": "Sell", "avgEntryPrice": "1.0", "avgExitPrice": "1.0",
+                 "qty": "1", "closedPnl": "0", "updatedTime": str(now_ms - 999_999)},
+            ]
+
+        def market_data(self, interval, bars):
+            raise StopIteration  # до рыночных данных в тесте не доходим
+
+    paper = PaperTrader(trades_path=str(tp))
+    w = SymbolWorker(symbol="XRPUSDT", exchange=Ex(), strategy=None,
+                     interval="60", warmup=25, paper=paper, simulate=False)
+    w._collect_live_closes()
+
+    text = tp.read_text(encoding="utf-8")
+    assert "1.3878" in text and "-0.031" in text, "свежая сделка должна записаться"
+    assert text.count("\n") == 2, "древняя сделка (старше минуты) не тащится"
+    lines = text.splitlines()
+    assert lines[1].startswith("Buy,"), "закрывал Sell — значит позиция была Buy"
+
+    # повторный вызов не дублирует
+    w._collect_live_closes()
+    assert tp.read_text(encoding="utf-8").count("\n") == 2
