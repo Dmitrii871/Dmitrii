@@ -55,6 +55,47 @@ def run_rule(closes, lows, entry_bb, entry_rsi, exit_bb, exit_rsi, need_both):
     return trades
 
 
+def run_flip_series(vals, closes, lows, highs, low_lvl, high_lvl,
+                    stop_pct=0.0, rearm=None):
+    """Перевёртыш по произвольному ряду (RSI, %B): лонг у нижнего края,
+    шорт у верхнего, позиция всегда одна. Логика идентична run_flip."""
+    off = len(closes) - len(vals)
+    if rearm is None:
+        rearm = (high_lvl - low_lvl) * 0.07
+    trades = []
+    side, entry, entry_i, worst = None, 0.0, 0, 0.0
+    long_armed = short_armed = True
+    for i in range(off + 1, len(closes)):
+        v = vals[i - off]
+        price = closes[i]
+        if v > low_lvl + rearm:
+            long_armed = True
+        if v < high_lvl - rearm:
+            short_armed = True
+        if side == "long":
+            worst = min(worst, lows[i])
+            if stop_pct and lows[i] <= entry * (1 - stop_pct / 100):
+                trades.append((entry, entry * (1 - stop_pct / 100), i - entry_i, worst, "long"))
+                side, long_armed = None, False
+                continue
+        elif side == "short":
+            worst = max(worst, highs[i])
+            if stop_pct and highs[i] >= entry * (1 + stop_pct / 100):
+                trades.append((entry, entry * (1 + stop_pct / 100), i - entry_i, worst, "short"))
+                side, short_armed = None, False
+                continue
+        want = "long" if v <= low_lvl else ("short" if v >= high_lvl else None)
+        if want == "long" and not long_armed:
+            want = None
+        if want == "short" and not short_armed:
+            want = None
+        if want and want != side:
+            if side is not None:
+                trades.append((entry, price, i - entry_i, worst, side))
+            side, entry, entry_i, worst = want, price, i, price
+    return trades
+
+
 def run_flip(closes, lows, highs, low_lvl=30.0, high_lvl=70.0, stop_pct=0.0):
     """Перевёртыш: лонг при RSI<=30, шорт при RSI>=70, позиция всегда одна.
 
@@ -180,6 +221,7 @@ def main() -> int:
             continue
         data[sym] = ([float(x[4]) for x in rows], [float(x[3]) for x in rows],
                      [float(x[2]) for x in rows])
+    print("  === по RSI (лонг<=30 / шорт>=70) ===")
     for stop, label in ((0.0, "без стопа"), (2.0, "стоп 2%"), (5.0, "стоп 5%")):
         print(f"  --- {label} ---")
         print(f"  {'символ':<10}{'сделок':>7}{'винрейт':>9}{'держали':>9}"
@@ -187,6 +229,22 @@ def main() -> int:
         t_net = t_n = 0.0
         for sym, (closes, lows, highs) in data.items():
             fr = report_flip(run_flip(closes, lows, highs, stop_pct=stop), 5.5)
+            t_net += fr["net"]; t_n += fr["n"]
+            print(f"  {sym:<10}{fr['n']:>7}{fr['wr']:>8.0f}%{fr['avg_hold']:>8.1f}ч"
+                  f"{fr['net']:>11.2f}{fr['worst_dip']:>11.1f}%")
+        print(f"  {'ИТОГО':<10}{t_n:>7.0f}{'':>9}{'':>9}{t_net:>11.2f}\n")
+
+    print("  === по Боллинджеру (лонг при %B<=0 / шорт при %B>=1) ===")
+    for stop, label in ((0.0, "без стопа"), (2.0, "стоп 2%")):
+        print(f"  --- {label} ---")
+        print(f"  {'символ':<10}{'сделок':>7}{'винрейт':>9}{'держали':>9}"
+              f"{'итог USDT':>11}{'макс.против':>12}")
+        t_net = t_n = 0.0
+        for sym, (closes, lows, highs) in data.items():
+            b = bollinger_pct_b(closes, BB_P)
+            tr = run_flip_series(b, closes, lows, highs, 0.0, 1.0,
+                                 stop_pct=stop, rearm=0.15)
+            fr = report_flip(tr, 5.5)
             t_net += fr["net"]; t_n += fr["n"]
             print(f"  {sym:<10}{fr['n']:>7}{fr['wr']:>8.0f}%{fr['avg_hold']:>8.1f}ч"
                   f"{fr['net']:>11.2f}{fr['worst_dip']:>11.1f}%")
