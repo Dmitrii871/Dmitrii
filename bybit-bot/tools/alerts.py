@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.indicators import rsi  # noqa: E402
+from bot.indicators import bollinger_pct_b, rsi  # noqa: E402
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
 INTERVAL = "15"            # 15-минутные свечи; третьим аргументом можно сменить
@@ -51,7 +51,8 @@ def main() -> int:
     from pybit.unified_trading import HTTP
     http = HTTP(testnet=False)
 
-    zone: dict[str, str] = {s: "" for s in SYMBOLS}   # "", "low", "high"
+    zone: dict[str, str] = {s: "" for s in SYMBOLS}       # RSI: "", "low", "high"
+    bb_zone: dict[str, str] = {s: "" for s in SYMBOLS}    # Боллинджер отдельно
     print(f"Сигналка запущена: RSI(14) на {interval}-минутках, покупка<={buy_lvl:g}, "
           f"продажа>={sell_lvl:g}, проверка раз в {CHECK_EVERY // 60} мин")
     notify("Сигналка запущена", f"RSI: зоны {buy_lvl:g} / {sell_lvl:g}")
@@ -63,9 +64,11 @@ def main() -> int:
                                     interval=interval, limit=60)["result"]["list"]
                 closes = [float(r[4]) for r in reversed(kl)][:-1]
                 series = rsi(closes)
-                if not series:
+                bb = bollinger_pct_b(closes)
+                if not series or not bb:
                     continue
                 r = series[-1]
+                b = bb[-1]
                 price = closes[-1]
             except Exception as exc:  # noqa: BLE001 — сигналка живучая
                 print(f"{sym}: {exc}", flush=True)
@@ -81,6 +84,17 @@ def main() -> int:
                        f"Зона продажи (>= {sell_lvl:g}). Цена {price:g}")
             elif buy_lvl + 3 < r < sell_lvl - 3:
                 zone[sym] = ""                 # вышли из зоны — можно сигналить снова
+
+            if b <= 0.02 and bb_zone[sym] != "low":
+                bb_zone[sym] = "low"
+                notify(f"{sym}: НИЖНЯЯ полоса Боллинджера",
+                       f"%B {b:.2f} — зона покупки по твоей системе. Цена {price:g}")
+            elif b >= 0.98 and bb_zone[sym] != "high":
+                bb_zone[sym] = "high"
+                notify(f"{sym}: ВЕРХНЯЯ полоса Боллинджера",
+                       f"%B {b:.2f} — зона продажи. Цена {price:g}")
+            elif 0.15 < b < 0.85:
+                bb_zone[sym] = ""
             time.sleep(0.3)
         time.sleep(CHECK_EVERY)
 
