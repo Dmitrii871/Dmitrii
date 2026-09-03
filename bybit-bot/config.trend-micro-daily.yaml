@@ -1,0 +1,46 @@
+# МИКРО-РЕЖИМ, ДНЕВНЫЕ СВЕЧИ: боевая торговля на проверенном историей
+# с копеечным риском. XRP и DOGE по 6 USDT, SOL 12 (минимумы биржи).
+# Худшая сделка ~0.25 USDT, дневной стоп 1 USDT.
+# Это проверка исправности, НЕ заработок: край измерен на дневках,
+# здесь часовики ради частых сделок.
+#
+# Запуск: cp config.trend-micro.yaml config.yaml && ./start.sh --live
+
+testnet: false
+dry_run: false
+
+symbols:
+  - XRPUSDT
+  - DOGEUSDT
+  - SOLUSDT
+
+category: linear
+leverage: 1
+
+strategy:
+  name: trend
+  trend:
+    interval: "D"      # дневные свечи — таймфрейм, проверенный 6-летней историей
+    enter_days: 20     # здесь это 20 ЧАСОВ канала
+    exit_days: 10
+    order_notional_usdt: 6
+    notional_overrides:
+      SOLUSDT: 12       # минимальный лот SOL ~10.3 USDT
+    direction: both
+    disaster_stop_pct: 15
+
+risk:
+  max_position_usdt: 25
+  max_daily_loss_usdt: 1.0
+  max_loss_streak: 12
+  kill_switch_file: ./STOP
+
+poll_seconds: 300
+request_gap_seconds: 0.3
+heartbeat_seconds: 3600
+
+journal_file: journal.csv
+trades_file: trades.csv
+paper_equity: 500
+log_level: INFO
+lock_file: ./bot.lock
