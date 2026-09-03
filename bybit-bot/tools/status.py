@@ -39,7 +39,10 @@ def _proc() -> str:
         if not pid.isdigit() or int(pid) in mine:
             continue
         low = args.lower()
-        if "bot.main" in low and "python" in low and "status.py" not in low:
+        # caffeinate-обёртка автозапуска несёт в argv те же слова, что и бот —
+        # это страж от засыпания, а не второй экземпляр
+        if ("bot.main" in low and "python" in low
+                and "status.py" not in low and "caffeinate" not in low):
             found.append(pid)
     if not found:
         return "НЕ ЗАПУЩЕН"
