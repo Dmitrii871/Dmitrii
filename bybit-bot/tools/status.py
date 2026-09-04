@@ -48,14 +48,18 @@ def _proc() -> str:
         return "НЕ ЗАПУЩЕН"
     if len(found) > 1:
         return f"ВНИМАНИЕ: экземпляров {len(found)} (PID {', '.join(found)}) — должен быть один"
+    # bot.lock пишет САМ работающий бот (держатель flock) — в отличие от
+    # bot.pid, который оставлял только ручной start.sh: после перезагрузки
+    # автозапуск поднимал бота с новым PID, и статус ложно кричал про
+    # «уцелевший старый экземпляр».
     expected = ""
     try:
-        expected = Path("bot.pid").read_text().strip()
+        expected = Path("bot.lock").read_text().strip()
     except OSError:
         pass
     if expected and found[0] != expected:
-        return (f"ВНИМАНИЕ: работает PID {found[0]}, но start.sh запускал {expected}. "
-                "Это уцелевший СТАРЫЙ экземпляр — выполните ./start.sh")
+        return (f"ВНИМАНИЕ: работает PID {found[0]}, а блокировку держал {expected} — "
+                "похоже на два экземпляра, проверьте: pgrep -fl bot.main")
     return f"работает, PID {found[0]}"
 
 

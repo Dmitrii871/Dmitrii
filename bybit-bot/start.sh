@@ -77,7 +77,7 @@ fi
 
 nohup "$PY" -m bot.main --config config.yaml $EXTRA >> bot.out 2>&1 &
 PID=$!
-echo "$PID" > bot.pid
+rm -f bot.pid
 echo "Бот запущен, PID $PID"
 
 # не даём Mac уснуть, пока бот жив (на Linux caffeinate нет — пропускаем)
