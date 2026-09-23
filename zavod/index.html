@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap">
+<link rel="stylesheet" href="studio.css">
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head>
+<body>
+<header class="bar">
+  <h1>📖 Контент-завод</h1>
+  <label>Тема <select id="topic"></select></label>
+  <label>Формат <select id="format"></select></label>
+  <label>Seed <input id="seed" size="10"></label>
+  <button id="reroll" type="button">🎲 Другая подборка</button>
+  <button id="copy" type="button">Копировать подпись</button>
+  <button id="export" type="button" class="primary">Скачать ZIP (PNG + подпись)</button>
+  <span id="status"></span>
+</header>
+<main>
+  <textarea id="caption" aria-label="Подпись к посту"></textarea>
+  <div id="deck"></div>
+</main>
+<script src="studio.js"></script>
+</body>
+</html>

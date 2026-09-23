@@ -1,0 +1,166 @@
+:root {
+  --bg: #f4efe6;
+  --panel: #fffaf2;
+  --ink: #2b2118;
+  --muted: #7a6a58;
+  --accent: #9c3d1f;
+  --line: #e0d4c2;
+  --paper: #f6ecd9;
+  --paper-edge: #e3d2b3;
+  --paper-ink: #2e2419;
+  --paper-accent: #8a2f17;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1814;
+    --panel: #26211b;
+    --ink: #efe6d8;
+    --muted: #b3a38f;
+    --accent: #e0835f;
+    --line: #3d352c;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1814;
+  --panel: #26211b;
+  --ink: #efe6d8;
+  --muted: #b3a38f;
+  --accent: #e0835f;
+  --line: #3d352c;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 "Lora", Georgia, serif;
+}
+header.bar {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: end;
+  padding: 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 5;
+}
+header.bar h1 { margin: 0 12px 0 0; font: 600 22px "Cormorant Garamond", serif; }
+header.bar label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
+header.bar select, header.bar input, header.bar button {
+  font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+}
+header.bar button { cursor: pointer; }
+header.bar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+#status { font-size: 13px; color: var(--muted); align-self: center; }
+
+main { padding: 16px; }
+#caption {
+  width: 100%; max-width: 900px; min-height: 140px; margin-bottom: 16px;
+  font: 14px/1.5 system-ui, sans-serif; padding: 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+}
+#deck { display: flex; flex-wrap: wrap; gap: 16px; }
+.frame {
+  width: calc(var(--w) * var(--s) * 1px);
+  height: calc(var(--h) * var(--s) * 1px);
+  overflow: hidden; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  position: relative;
+}
+.frame > .page { transform: scale(var(--s)); transform-origin: 0 0; }
+.frame .num {
+  position: absolute; top: 6px; left: 6px; z-index: 2; background: rgba(0,0,0,.55); color: #fff;
+  font: 12px system-ui, sans-serif; padding: 2px 6px; border-radius: 4px;
+}
+body.render header.bar, body.render #caption, body.render .num { display: none; }
+body.render main { padding: 0; }
+body.render #deck { gap: 0; flex-direction: column; }
+body.render .frame { --s: 1; border-radius: 0; box-shadow: none; }
+
+/* ---------- Book page (rendered at native size) ---------- */
+.page {
+  width: calc(var(--w) * 1px);
+  height: calc(var(--h) * 1px);
+  position: relative;
+  color: var(--paper-ink);
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(255,250,238,.9) 0%, rgba(255,250,238,0) 65%),
+    radial-gradient(ellipse at 100% 100%, rgba(150,110,60,.25) 0%, rgba(150,110,60,0) 45%),
+    radial-gradient(ellipse at 0% 0%, rgba(150,110,60,.18) 0%, rgba(150,110,60,0) 40%),
+    repeating-linear-gradient(0deg, rgba(120,90,50,.025) 0 2px, transparent 2px 5px),
+    var(--paper);
+  font-family: "Lora", Georgia, serif;
+  overflow: hidden;
+}
+/* book spine shadow and page edges */
+.page::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 90px;
+  background: linear-gradient(90deg, rgba(60,40,20,.35), rgba(60,40,20,.08) 40%, transparent);
+}
+.page::after {
+  content: ""; position: absolute; inset: 0 0 0 auto; width: 14px;
+  background: repeating-linear-gradient(90deg, var(--paper-edge) 0 2px, #fbf4e6 2px 4px);
+  box-shadow: inset 2px 0 4px rgba(0,0,0,.12);
+}
+.page .inner {
+  position: absolute; inset: 110px 120px 130px 150px;
+  display: flex; flex-direction: column;
+}
+.page .runhead {
+  position: absolute; top: 56px; left: 150px; right: 120px;
+  display: flex; justify-content: space-between;
+  font: italic 28px "Cormorant Garamond", serif; color: #8b7a63;
+  border-bottom: 1px solid rgba(120,90,50,.3); padding-bottom: 10px;
+}
+.page .folio {
+  position: absolute; bottom: 52px; left: 150px; right: 120px; text-align: center;
+  font: 32px "Cormorant Garamond", serif; color: #8b7a63; letter-spacing: 4px;
+}
+.page .swipe {
+  position: absolute; bottom: 56px; right: 130px;
+  font: italic 28px "Cormorant Garamond", serif; color: var(--paper-accent);
+}
+.page .body { margin: auto 0; }
+.page .ornament { text-align: center; font-size: 56px; color: var(--paper-accent); line-height: 1; margin: 30px 0; }
+.page h2 {
+  font: 600 76px/1.08 "Cormorant Garamond", serif; margin: 0 0 36px; color: var(--paper-ink);
+}
+.page p.text { font-size: 44px; line-height: 1.5; margin: 0; text-align: justify; hyphens: auto; }
+.page p.text::first-letter {
+  float: left; font: 700 150px/0.82 "Cormorant Garamond", serif;
+  color: var(--paper-accent); margin: 10px 18px 0 0;
+}
+.page .tipno { font: italic 34px "Cormorant Garamond", serif; color: var(--paper-accent); margin-bottom: 12px; letter-spacing: 2px; }
+
+/* cover */
+.page.cover .inner { justify-content: center; text-align: center; }
+.page.cover .frameline {
+  border: 3px double rgba(138,47,23,.6); padding: 90px 60px; outline: 1px solid rgba(138,47,23,.3); outline-offset: 16px;
+}
+.page.cover .chapter { font: italic 40px "Cormorant Garamond", serif; color: var(--paper-accent); margin-bottom: 40px; }
+.page.cover h1 { font: 700 104px/1.05 "Cormorant Garamond", serif; margin: 0; }
+.page.cover .author { margin-top: 50px; font: 34px "Cormorant Garamond", serif; letter-spacing: 6px; text-transform: uppercase; color: #6d5c46; }
+
+/* quote */
+.page.quote .body { text-align: center; }
+.page.quote .mark { font: 700 220px/0.6 "Cormorant Garamond", serif; color: var(--paper-accent); opacity: .8; }
+.page.quote blockquote { margin: 40px 0 0; font: italic 62px/1.35 "Cormorant Garamond", serif; }
+.page.quote .who { margin-top: 44px; font: 36px "Cormorant Garamond", serif; letter-spacing: 4px; color: #6d5c46; }
+
+/* call to action (every Nth slide) */
+.page.cta .body { text-align: center; }
+.page.cta .label {
+  display: inline-block; font: 600 28px system-ui, sans-serif; letter-spacing: 3px; text-transform: uppercase;
+  color: var(--paper-accent); border: 2px solid var(--paper-accent); border-radius: 40px; padding: 8px 26px; margin-bottom: 36px;
+}
+.page.cta h2 { font-size: 88px; }
+.page.cta p.text { text-align: center; }
+.page.cta p.text::first-letter { float: none; font: inherit; color: inherit; margin: 0; }
+.page.cta .qr { margin: 44px auto 0; width: 280px; height: 280px; background: #fffaf0; padding: 18px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+.page.cta .qr svg, .page.cta .qr img { width: 100%; height: 100%; display: block; }
+.page.cta .button {
+  display: inline-block; margin-top: 40px; background: var(--paper-accent); color: #fff8ec;
+  font: 600 40px system-ui, sans-serif; padding: 22px 48px; border-radius: 60px;
+}
+
+/* final page */
+.page.final .body { text-align: center; }
+.page.final h2 { font-size: 96px; }
+.page.final .actions { font-size: 44px; line-height: 1.8; }
