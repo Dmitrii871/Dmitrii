@@ -1,0 +1,17 @@
+/* Шрифты Cormorant Garamond и Lora (SIL Open Font License), из пакетов @fontsource */
+@font-face{font-family:"Cormorant Garamond";font-weight:400;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-cyrillic-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:400;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:600;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-cyrillic-600-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:600;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:700;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-cyrillic-700-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:700;font-style:normal;font-display:block;src:url(fonts/cormorant-garamond-latin-700-normal.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:400;font-style:italic;font-display:block;src:url(fonts/cormorant-garamond-cyrillic-400-italic.woff2) format("woff2")}
+@font-face{font-family:"Cormorant Garamond";font-weight:400;font-style:italic;font-display:block;src:url(fonts/cormorant-garamond-latin-400-italic.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:400;font-style:normal;font-display:block;src:url(fonts/lora-cyrillic-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:400;font-style:normal;font-display:block;src:url(fonts/lora-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:600;font-style:normal;font-display:block;src:url(fonts/lora-cyrillic-600-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:600;font-style:normal;font-display:block;src:url(fonts/lora-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:700;font-style:normal;font-display:block;src:url(fonts/lora-cyrillic-700-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:700;font-style:normal;font-display:block;src:url(fonts/lora-latin-700-normal.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:400;font-style:italic;font-display:block;src:url(fonts/lora-cyrillic-400-italic.woff2) format("woff2")}
+@font-face{font-family:"Lora";font-weight:400;font-style:italic;font-display:block;src:url(fonts/lora-latin-400-italic.woff2) format("woff2")}

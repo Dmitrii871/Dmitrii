@@ -122,11 +122,12 @@ body.render .frame { --s: 1; border-radius: 0; box-shadow: none; }
 .page h2 {
   font: 600 76px/1.08 "Cormorant Garamond", serif; margin: 0 0 36px; color: var(--paper-ink);
 }
-.page p.text { font-size: 44px; line-height: 1.5; margin: 0; text-align: justify; hyphens: auto; }
+.page p.text { font-size: 44px; line-height: 1.5; margin: 0; text-align: left; }
 .page p.text::first-letter {
   float: left; font: 700 150px/0.82 "Cormorant Garamond", serif;
   color: var(--paper-accent); margin: 10px 18px 0 0;
 }
+.page p.text.nodrop::first-letter { float: none; font: inherit; color: inherit; margin: 0; }
 .page .tipno { font: italic 34px "Cormorant Garamond", serif; color: var(--paper-accent); margin-bottom: 12px; letter-spacing: 2px; }
 
 /* cover */
@@ -144,23 +145,43 @@ body.render .frame { --s: 1; border-radius: 0; box-shadow: none; }
 .page.quote blockquote { margin: 40px 0 0; font: italic 62px/1.35 "Cormorant Garamond", serif; }
 .page.quote .who { margin-top: 44px; font: 36px "Cormorant Garamond", serif; letter-spacing: 4px; color: #6d5c46; }
 
+/* quiz: question + answer pages */
+.page ol.options { list-style: none; padding: 0 0 0 40px; margin: 10px 0 30px; font-size: 50px; line-height: 2; }
+.page ol.options span { color: var(--paper-accent); font-weight: 600; }
+.page .hint { text-align: center; font: italic 38px "Cormorant Garamond", serif; color: var(--paper-accent); margin-top: 20px; }
+
 /* call to action (every Nth slide) */
 .page.cta .body { text-align: center; }
 .page.cta .label {
   display: inline-block; font: 600 28px system-ui, sans-serif; letter-spacing: 3px; text-transform: uppercase;
   color: var(--paper-accent); border: 2px solid var(--paper-accent); border-radius: 40px; padding: 8px 26px; margin-bottom: 36px;
 }
-.page.cta h2 { font-size: 88px; }
+.page.cta h2 { font-size: 84px; margin-bottom: 30px; }
 .page.cta p.text { text-align: center; }
 .page.cta p.text::first-letter { float: none; font: inherit; color: inherit; margin: 0; }
-.page.cta .qr { margin: 44px auto 0; width: 280px; height: 280px; background: #fffaf0; padding: 18px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
-.page.cta .qr svg, .page.cta .qr img { width: 100%; height: 100%; display: block; }
+.page.cta .cta-row { display: flex; gap: 36px; align-items: center; justify-content: center; margin-top: 50px; }
+.page.cta .qr { width: 340px; height: 340px; padding: 32px; background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.15); flex: none; }
+.page.cta .qr svg { width: 100%; height: 100%; display: block; }
+.page.cta .cta-side { display: flex; flex-direction: column; gap: 22px; align-items: center; }
 .page.cta .button {
-  display: inline-block; margin-top: 40px; background: var(--paper-accent); color: #fff8ec;
-  font: 600 40px system-ui, sans-serif; padding: 22px 48px; border-radius: 60px;
+  background: var(--paper-accent); color: #fff8ec; font: 600 36px/1.2 system-ui, sans-serif; padding: 26px 44px; border-radius: 60px;
 }
+.page.cta .cta-row.solo .button { font-size: 44px; padding: 30px 56px; }
+.page.cta .region { font: italic 30px "Cormorant Garamond", serif; color: var(--paper-accent); max-width: 380px; }
+.page.cta .note { margin-top: 30px; font: 600 26px system-ui, sans-serif; color: var(--paper-accent); }
+.page.cta .disclaimer { margin-top: 18px; font: 24px system-ui, sans-serif; color: #7a6a58; }
 
 /* final page */
 .page.final .body { text-align: center; }
 .page.final h2 { font-size: 96px; }
 .page.final .actions { font-size: 44px; line-height: 1.8; }
+
+/* 9:16 (TikTok / Reels): крупнее текст, больше воздуха */
+#deck[data-format="story"] .page .inner { inset: 180px 120px 200px 150px; }
+#deck[data-format="story"] .page h2 { font-size: 88px; }
+#deck[data-format="story"] .page p.text { font-size: 52px; }
+#deck[data-format="story"] .page.cover h1 { font-size: 120px; }
+#deck[data-format="story"] .page.quote blockquote { font-size: 72px; }
+#deck[data-format="story"] .page .runhead { top: 90px; }
+#deck[data-format="story"] .page .folio { bottom: 90px; }
+#deck[data-format="story"] .page .swipe { bottom: 96px; }

@@ -1,19 +1,26 @@
-// Контент-завод: собирает карусель «страниц книги» из банка советов/цитат.
-// Структура: 1 — обложка, каждый ctaEvery-й — продукт/ссылка, последний — финал.
+// Контент-завод: собирает карусель «страниц книги» из банка советов/цитат/тестов.
+// Структура: 1 — обложка, каждый ctaEvery-й — закладка с продуктом, последний — финал.
+// Тест («quiz») занимает две страницы подряд: вопрос и ответ.
 
 const TOPICS = {
-  sport: "Спорт",
-  motivation: "Мотивация",
-  psychology: "Психология",
-  habits: "Привычки",
   sleep: "Сон",
+  psychology: "Психология",
+  motivation: "Мотивация",
+  habits: "Привычки",
+  sport: "Спорт",
 };
 
 const params = new URLSearchParams(location.search);
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// **жирный** в текстах закладок
+const rich = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+const LETTERS = ["А", "Б", "В", "Г"];
+// Буквица только для текста, начинающегося с буквы («10 минут…» без неё).
+const textP = (s) => `<p class="text${/^\p{L}/u.test(s) ? "" : " nodrop"}">${esc(s)}</p>`;
 
 let config;
+let catalog;
 let current = { slides: [], caption: "" };
 
 // Детерминированный генератор: один и тот же seed даёт ту же карусель.
@@ -37,21 +44,43 @@ function shuffle(arr, rand) {
   return a;
 }
 
+function ctaQueue(topic, rand) {
+  const products = shuffle(catalog.items.filter((p) => p.topics.includes(topic.id)), rand)
+    .map((p) => ({ ...p.slide, link: p.link, disclaimer: p.disclaimer, keyword: config.keywords[topic.id] }));
+  const business = { ...config.business };
+  return (i) => (products.length === 0 || (i > 0 && rand() < config.businessShare) ? business : products[i % products.length]);
+}
+
 function plan(topic, seed) {
   const rand = rng(`${topic.id}:${seed}`);
   const total = config.slidesPerCarousel;
-  const every = config.ctaEvery;
-  const items = shuffle(topic.items, rand);
-  const products = shuffle(config.products, rand);
+  const isCta = (n) => n % config.ctaEvery === 0;
+  const queue = shuffle(topic.items, rand);
+  const nextCta = ctaQueue(topic, rand);
   const slides = [{ type: "cover" }];
   let tipNo = 0;
   let ctaNo = 0;
+  let quizzes = 0;
+  const take = (fits) => {
+    const i = queue.findIndex(fits);
+    return i < 0 ? null : queue.splice(i, 1)[0];
+  };
   for (let n = 2; n < total; n++) {
-    if (n % every === 0) {
-      slides.push({ type: "cta", product: products[ctaNo++ % products.length] });
+    if (isCta(n)) {
+      slides.push({ type: "cta", cta: nextCta(ctaNo++) });
+      continue;
+    }
+    // Тест ставим, только если обе его страницы помещаются до закладки/финала.
+    const roomForQuiz = n + 1 < total && !isCta(n + 1) && quizzes < 1;
+    const item = take((it) => it.kind !== "quiz" || roomForQuiz) || { kind: "tip", head: "", text: "" };
+    if (item.kind === "quiz") {
+      quizzes++;
+      slides.push({ type: "quiz", item }, { type: "answer", item });
+      n++;
+    } else if (item.kind === "quote") {
+      slides.push({ type: "quote", item });
     } else {
-      const item = items[(n - 2 - ctaNo) % items.length];
-      slides.push(item.kind === "quote" ? { type: "quote", item } : { type: "tip", item, no: ++tipNo });
+      slides.push({ type: "tip", item, no: ++tipNo });
     }
   }
   slides.push({ type: "final" });
@@ -82,7 +111,7 @@ function pageHtml(slide, i, topic) {
     case "tip":
       body = `<div class="tipno">Совет № ${slide.no}</div>
         <h2>${esc(slide.item.head)}</h2>
-        <p class="text">${esc(slide.item.text)}</p>
+        ${textP(slide.item.text)}
         <div class="ornament">❧</div>`;
       break;
     case "quote":
@@ -90,13 +119,36 @@ function pageHtml(slide, i, topic) {
         <blockquote>${esc(slide.item.text)}</blockquote>
         <div class="who">— ${esc(slide.item.author)}</div>`;
       break;
+    case "quiz":
+      body = `<div class="tipno">Проверь себя</div>
+        <h2>${esc(slide.item.q)}</h2>
+        <ol class="options">${slide.item.options.map((o, k) => `<li><span>${LETTERS[k]})</span> ${esc(o)}</li>`).join("")}</ol>
+        <div class="hint">Запомни свой ответ — и переверни страницу →</div>`;
+      break;
+    case "answer": {
+      const it = slide.item;
+      body = `<div class="tipno">Ответ</div>
+        <h2>${LETTERS[it.answer]}) ${esc(it.options[it.answer])}</h2>
+        ${textP(it.explain)}
+        <div class="ornament">❧</div>
+        <div class="hint">Угадал? Напиши в комментариях ✍️</div>`;
+      break;
+    }
     case "cta": {
-      const p = slide.product;
+      const c = slide.cta;
+      const keyword = c.keyword || config.keywords[topic.id];
+      const qr = c.link
+        ? `<div class="qr">${qrSvg(c.link)}</div>`
+        : "";
       body = `<div class="label">Закладка автора</div>
-        <h2>${esc(p.title)}</h2>
-        <p class="text">${esc(p.text)}</p>
-        <div class="qr">${qrSvg(p.link)}</div>
-        <div class="button">${esc(p.button)}</div>`;
+        <h2>${esc(c.title)}</h2>
+        <p class="text">${rich(c.text)}</p>
+        <div class="cta-row${c.link ? "" : " solo"}">${qr}
+          <div class="cta-side"><div class="button">Напиши «${esc(keyword)}»<br>в директ</div>
+          ${c.link ? `<div class="region">${esc(config.regionHint)}</div>` : ""}</div>
+        </div>
+        ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
+        ${c.disclaimer ? `<div class="disclaimer">${esc(c.disclaimer)}</div>` : ""}`;
       break;
     }
     case "final":
@@ -110,19 +162,24 @@ function pageHtml(slide, i, topic) {
 
 function captionFor(topic, slides) {
   const tips = slides.filter((s) => s.type === "tip").map((s) => `• ${s.item.head}`);
-  const cta = slides.find((s) => s.type === "cta");
+  const quiz = slides.find((s) => s.type === "quiz");
+  const ctas = slides.filter((s) => s.type === "cta").map((s) => s.cta);
   const tags = [...config.hashtags.common, ...(config.hashtags[topic.id] || [])].join(" ");
+  const keyword = config.keywords[topic.id];
   return [
     `${topic.cover} 📖`,
     "",
     ...tips,
+    quiz ? `\n🧠 Внутри тест: ${quiz.item.q} Пиши свой вариант в комментариях до того, как посмотришь ответ!` : "",
     "",
-    cta ? `${cta.product.title} ${cta.product.button} 👉 ${cta.product.link}` : "",
+    `💬 Напиши «${keyword}» в директ — расскажу подробнее и пришлю ссылку.`,
+    ctas.some((c) => c.keyword === config.business.keyword) ? `💼 Интересно своё дело из дома? Напиши «${config.business.keyword}».` : "",
     "",
     "Сохрани и отправь тому, кому это нужно.",
+    ctas.some((c) => c.disclaimer) ? "\nБАД. Не является лекарственным средством." : "",
     "",
     tags,
-  ].join("\n");
+  ].filter((l, k, a) => !(l === "" && a[k - 1] === "")).join("\n");
 }
 
 async function build() {
@@ -135,14 +192,15 @@ async function build() {
   deck.style.setProperty("--w", format.width);
   deck.style.setProperty("--h", format.height);
   deck.style.setProperty("--s", params.has("render") ? 1 : 0.28);
+  deck.dataset.format = $("#format").value;
   deck.innerHTML = slides
-    .map((s, i) => `<div class="frame"><span class="num">${i + 1}${s.type === "cta" ? " · продукт" : ""}</span>${pageHtml(s, i, topic)}</div>`)
+    .map((s, i) => `<div class="frame"><span class="num">${i + 1}${s.type === "cta" ? " · закладка" : ""}</span>${pageHtml(s, i, topic)}</div>`)
     .join("");
   current = { slides, topic, format, seed, caption: captionFor(topic, slides) };
   $("#caption").value = current.caption;
   await document.fonts.ready;
   $("#status").textContent = `${slides.length} слайдов · ${format.width}×${format.height}`;
-  window.__carousel = { topic: topic.id, seed, count: slides.length, caption: current.caption };
+  window.__carousel = { topic: topic.id, seed, count: slides.length, caption: current.caption, types: slides.map((s) => s.type) };
 }
 
 async function exportZip() {
@@ -176,7 +234,7 @@ async function exportZip() {
 }
 
 async function init() {
-  config = await (await fetch("config.json")).json();
+  [config, catalog] = await Promise.all(["config.json", "products.json"].map(async (f) => (await fetch(f)).json()));
   $("#topic").innerHTML = Object.entries(TOPICS).map(([id, name]) => `<option value="${id}">${name}</option>`).join("");
   $("#format").innerHTML = Object.entries(config.formats).map(([id, f]) => `<option value="${id}">${f.label}</option>`).join("");
   if (params.get("topic")) $("#topic").value = params.get("topic");
