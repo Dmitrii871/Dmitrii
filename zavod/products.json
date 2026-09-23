@@ -1,0 +1,40 @@
+{
+  "_note": "Каталог продуктов NL для слайдов-«закладок». Тексты без медицинских обещаний; на слайде всегда пометка disclaimer.",
+  "items": [
+    {
+      "id": "antistress-formula",
+      "name": "«Антистресс формула» (Antistress Formula)",
+      "line": "Сделано в Сибири",
+      "article": "74848",
+      "price": "1 290 ₽",
+      "pack": "20 стиков по 8,5 г",
+      "link": "https://ng.nlstar.com/ru/api/referrals/ref/VtLCTY/",
+      "image": "assets/products/antistress-formula.webp",
+      "topics": ["sleep", "psychology"],
+      "facts": [
+        "10 экстрактов сибирских трав и аминокислоты",
+        "шафран, глицин, L-теанин",
+        "по описанию производителя: способствует снятию напряжения, балансу эмоций, качественному сну и лёгкому пробуждению"
+      ],
+      "disclaimer": "БАД. Не является лекарственным средством. Произведён в России."
+    },
+    {
+      "id": "magnesium-marine",
+      "name": "Magnesium Marine Greenflash (морской магний)",
+      "price": "990 ₽",
+      "pack": "30 капсул по 591 мг",
+      "dose": "1 капсула в сутки: магний 160 мг, витамин B6 1 мг",
+      "link": "https://ng.nlstar.com/ru/api/referrals/ref/YmxP6J/",
+      "image": "assets/products/magnesium-marine.webp",
+      "images": ["assets/products/magnesium-marine.webp", "assets/products/magnesium-marine-2.webp"],
+      "topics": ["sleep", "sport", "psychology"],
+      "facts": [
+        "морской нативный магний из вод Северной Атлантики (Ирландское море)",
+        "730 л морской воды на одну упаковку",
+        "высокая биодоступность, сертификат «Халяль»",
+        "по описанию производителя: поддерживает баланс нервной системы, питание мышц и сердечно-сосудистой системы"
+      ],
+      "disclaimer": "БАД. Не является лекарственным средством. Произведён в России."
+    }
+  ]
+}
