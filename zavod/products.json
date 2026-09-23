@@ -10,7 +10,10 @@
       "pack": "20 стиков по 8,5 г",
       "link": "https://ng.nlstar.com/ru/api/referrals/ref/VtLCTY/",
       "image": "assets/products/antistress-formula.webp",
-      "topics": ["sleep", "psychology"],
+      "topics": [
+        "sleep",
+        "psychology"
+      ],
       "facts": [
         "10 экстрактов сибирских трав и аминокислоты",
         "шафран, глицин, L-теанин",
@@ -26,8 +29,15 @@
       "dose": "1 капсула в сутки: магний 160 мг, витамин B6 1 мг",
       "link": "https://ng.nlstar.com/ru/api/referrals/ref/YmxP6J/",
       "image": "assets/products/magnesium-marine.webp",
-      "images": ["assets/products/magnesium-marine.webp", "assets/products/magnesium-marine-2.webp"],
-      "topics": ["sleep", "sport", "psychology"],
+      "images": [
+        "assets/products/magnesium-marine.webp",
+        "assets/products/magnesium-marine-2.webp"
+      ],
+      "topics": [
+        "sleep",
+        "sport",
+        "psychology"
+      ],
       "facts": [
         "морской нативный магний из вод Северной Атлантики (Ирландское море)",
         "730 л морской воды на одну упаковку",
@@ -35,6 +45,45 @@
         "по описанию производителя: поддерживает баланс нервной системы, питание мышц и сердечно-сосудистой системы"
       ],
       "disclaimer": "БАД. Не является лекарственным средством. Произведён в России."
+    },
+    {
+      "id": "5-htp-liposomal",
+      "name": "«5-HTP липосомальный» (5-HTP liposomal) Greenflash",
+      "price": "1 390 ₽",
+      "pack": "30 капсул по 511 мг",
+      "dose": "1 капсула в сутки: L-5-гидрокситриптофан 100 мг, L-триптофан 200 мг",
+      "link": "https://ng.nlstar.com/ru/api/referrals/ref/wnYCnq/",
+      "image": "assets/products/5-htp-liposomal.webp",
+      "topics": [
+        "sleep",
+        "psychology"
+      ],
+      "facts": [
+        "комплекс незаменимых аминокислот в липосомальной форме",
+        "по описанию производителя: для эмоционального равновесия, позитивного настроя и крепкого сна"
+      ],
+      "caution": "5-HTP влияет на серотонин: не сочетать с антидепрессантами без врача. На слайде обязательно «проконсультируйтесь со специалистом».",
+      "disclaimer": "БАД. Не является лекарственным средством. Перед применением проконсультируйтесь со специалистом."
+    },
+    {
+      "id": "metabrain-liposomal",
+      "name": "Нейроадаптоген «Метабрейн липосомальный» (Metabrain liposomal) Greenflash",
+      "pack": "30 капсул по 496 мг",
+      "dose": "2 капсулы в сутки: холин 160 мг, уридин-5-монофосфат 200 мг, поликозанол 70 мг",
+      "link": "https://ng.nlstar.com/ru/api/referrals/ref/cugeT1/",
+      "image": "assets/products/metabrain-liposomal.webp",
+      "topics": [
+        "motivation",
+        "habits",
+        "psychology"
+      ],
+      "facts": [
+        "холин (витамин B4), уридин, поликозанол из сахарного тростника",
+        "липосомальная форма, запатентованная технология (патент № 2821794)",
+        "по описанию производителя: для внимания, памяти и обучаемости при умственных нагрузках",
+        "сертификат «Халяль», произведено в России"
+      ],
+      "disclaimer": "БАД. Не является лекарственным средством. Перед применением проконсультируйтесь со специалистом."
     }
   ]
 }
