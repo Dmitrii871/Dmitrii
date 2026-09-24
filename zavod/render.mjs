@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Рендер карусели в файлы: PNG 4:5 (Instagram/Facebook), PNG 9:16 и MP4-слайдшоу (TikTok/Reels), подпись.
 //
-//   node render.mjs --topic sleep --seed 2026-09-24 [--out out] [--no-video]
+//   node render.mjs --topic sleep --seed 2026-09-24 [--slides 7] [--out out] [--no-video]
 //
 // Нужны: Playwright (npm i -g playwright) и ffmpeg с libx264 (путь можно задать в FFMPEG).
 
@@ -44,7 +44,7 @@ async function renderFormat(browser, format) {
     if (!file.startsWith(ROOT) || !fs.existsSync(file)) return route.fulfill({ status: 404 });
     route.fulfill({ contentType: TYPES[path.extname(file)] || "application/octet-stream", body: fs.readFileSync(file) });
   });
-  await page.goto(`${ORIGIN}/index.html?topic=${topic}&format=${format}&seed=${encodeURIComponent(seed)}&render=1`);
+  await page.goto(`${ORIGIN}/index.html?topic=${topic}&format=${format}&seed=${encodeURIComponent(seed)}${args.slides ? `&slides=${args.slides}` : ""}&render=1`);
   await page.waitForFunction(() => window.__ready, null, { timeout: 30000 });
   await page.evaluate(() => document.fonts.ready);
   const info = await page.evaluate(() => window.__carousel);
@@ -63,7 +63,7 @@ async function renderFormat(browser, format) {
 
 // Сколько секунд держать страницу: обложка короче, текст дольше.
 function durationFor(type) {
-  return { cover: 2.5, quote: 4, tip: 4.5, quiz: 4.5, answer: 4.5, cta: 5, final: 3 }[type] || 4;
+  return { cover: 2, quote: 3, tip: 3.5, quiz: 3.5, answer: 3.5, cta: 3.5, final: 2 }[type] || 3;
 }
 
 function makeVideo(files, types, file) {

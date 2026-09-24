@@ -3,6 +3,7 @@
 // Тест («quiz») занимает две страницы подряд: вопрос и ответ.
 
 const TOPICS = {
+  weightloss: "Похудение",
   sleep: "Сон",
   psychology: "Психология",
   motivation: "Мотивация",
@@ -53,7 +54,7 @@ function ctaQueue(topic, rand) {
 
 function plan(topic, seed) {
   const rand = rng(`${topic.id}:${seed}`);
-  const total = config.slidesPerCarousel;
+  const total = Number(params.get("slides")) || config.slidesPerCarousel;
   const isCta = (n) => n % config.ctaEvery === 0;
   const queue = shuffle(topic.items, rand);
   const nextCta = ctaQueue(topic, rand);
