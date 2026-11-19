@@ -8,6 +8,14 @@ DIR="$(pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.bybitbot.trend.plist"
 
 if [ "$1" = "off" ]; then
+    # Защита от случайной вставки этой команды в терминал: выключение
+    # требует осознанного подтверждения словом, иначе ничего не происходит.
+    printf "Выключить автозапуск и ОСТАНОВИТЬ торговлю? Введи слово СТОП: "
+    read -r answer
+    if [ "$answer" != "СТОП" ] && [ "$answer" != "STOP" ] && [ "$answer" != "стоп" ]; then
+        echo "Отменено — бот продолжает работать."
+        exit 0
+    fi
     launchctl unload "$PLIST" 2>/dev/null
     rm -f "$PLIST"
     pkill -f "bot.main" 2>/dev/null
@@ -62,4 +70,4 @@ launchctl unload "$PLIST" 2>/dev/null
 launchctl load "$PLIST"
 echo "Автозапуск включён: бот стартует при входе в систему и"
 echo "перезапускается после падений. Подтверждение YES больше не нужно."
-echo "Проверка через полминуты: ./status.sh | Выключить: ./autostart.sh off"
+echo "Проверка через полминуты: ./status.sh"
